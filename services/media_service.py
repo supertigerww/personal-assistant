@@ -68,8 +68,13 @@ class MediaService:
         self.user_service = user_service
         self.images_path = Path(settings.assets_images_path)
         self.videos_path = Path(settings.assets_videos_path)
-        self.images_path.mkdir(parents=True, exist_ok=True)
-        self.videos_path.mkdir(parents=True, exist_ok=True)
+        self._prepare_media_root(self.images_path, label="images")
+        self._prepare_media_root(self.videos_path, label="videos")
+        logger.info(
+            "MediaService configured for recursive asset scan. images_path=%s videos_path=%s",
+            self.images_path,
+            self.videos_path,
+        )
 
     async def asset_summary(self) -> dict[str, int]:
         try:
@@ -311,7 +316,26 @@ class MediaService:
             return None
 
     @staticmethod
+    def _prepare_media_root(path: Path, *, label: str) -> None:
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            logger.warning("Could not ensure %s media path %s: %s", label, path, exc)
+
+        if path.exists() and not path.is_dir():
+            logger.warning("Configured %s media path is not a directory: %s", label, path)
+        elif not path.exists():
+            logger.warning("Configured %s media path does not exist: %s", label, path)
+
+    @staticmethod
     def _list_assets(base_path: Path, suffixes: set[str]) -> list[Path]:
+        if not base_path.exists():
+            logger.warning("Media path does not exist, skipping scan: %s", base_path)
+            return []
+        if not base_path.is_dir():
+            logger.warning("Media path is not a directory, skipping scan: %s", base_path)
+            return []
+
         return [path for path in base_path.rglob("*") if path.is_file() and path.suffix.lower() in suffixes]
 
     @staticmethod

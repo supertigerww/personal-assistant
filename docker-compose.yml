@@ -6,6 +6,6 @@ services:
     env_file:
       - .env
     volumes:
-      - ./data:/app/data
-      - ./assets:/app/assets
-
+      - ${HOST_DATA_PATH:-./data}:/app/data
+      - ${HOST_ASSETS_IMAGES_PATH:-./assets/images}:${CONTAINER_ASSETS_IMAGES_PATH:-/app/assets/images}
+      - ${HOST_ASSETS_VIDEOS_PATH:-./assets/videos}:${CONTAINER_ASSETS_VIDEOS_PATH:-/app/assets/videos}
