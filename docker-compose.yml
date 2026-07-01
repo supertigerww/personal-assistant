@@ -1,0 +1,11 @@
+services:
+  bashqueen-bot:
+    build: .
+    container_name: bashqueen-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./assets:/app/assets
+
