@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     )
     assets_images_path: str = "assets/images"
     assets_videos_path: str = "assets/videos"
+    max_local_video_size_mb: int = 45
     safewords_csv: str = Field(default="red,红色,stop,pause,停,结束,暂停,停止,停下")
 
     @property

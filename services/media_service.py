@@ -28,7 +28,7 @@ class AssetSearchOutcome:
 
     @property
     def best_score(self) -> int:
-        top_scores = []
+        top_scores: list[int] = []
         if self.images:
             top_scores.append(self.images[0].score)
         if self.videos:
@@ -37,7 +37,7 @@ class AssetSearchOutcome:
 
 
 class MediaService:
-    IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+    IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
     VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm"}
     SPECIAL_SCENE_MARKERS = (
         "specific",
@@ -55,7 +55,7 @@ class MediaService:
         "定制",
         "细节",
         "特写",
-        "光线",
+        "灯光",
         "服装",
         "地点",
         "场景",
@@ -104,7 +104,11 @@ class MediaService:
             local_payload = self._outcome_to_payload(outcome)
 
             if self._is_good_match(outcome, context):
-                logger.info("Using strong local media match for user_id=%s with score=%s", user_id, outcome.best_score)
+                logger.info(
+                    "Using strong local media match for user_id=%s with score=%s",
+                    user_id,
+                    outcome.best_score,
+                )
                 return local_payload
 
             if await self._should_generate(context, user_id):
@@ -114,7 +118,11 @@ class MediaService:
                         logger.info("Generated supplemental images for user_id=%s", user_id)
                         return {"images": images, "videos": []}
                 except Exception as exc:
-                    logger.exception("生成图片失败: %s", exc)
+                    logger.exception(
+                        "Failed to generate supplemental image for user_id=%s: %s",
+                        user_id,
+                        exc,
+                    )
 
             fallback = await self.get_random_assets()
             if fallback["images"] or fallback["videos"]:
@@ -327,8 +335,7 @@ class MediaService:
         elif not path.exists():
             logger.warning("Configured %s media path does not exist: %s", label, path)
 
-    @staticmethod
-    def _list_assets(base_path: Path, suffixes: set[str]) -> list[Path]:
+    def _list_assets(self, base_path: Path, suffixes: set[str]) -> list[Path]:
         if not base_path.exists():
             logger.warning("Media path does not exist, skipping scan: %s", base_path)
             return []
@@ -336,7 +343,49 @@ class MediaService:
             logger.warning("Media path is not a directory, skipping scan: %s", base_path)
             return []
 
-        return [path for path in base_path.rglob("*") if path.is_file() and path.suffix.lower() in suffixes]
+        max_bytes = self._max_asset_bytes_for_suffixes(suffixes)
+        assets: list[Path] = []
+        skipped_oversized = 0
+
+        for path in base_path.rglob("*"):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in suffixes:
+                continue
+
+            if max_bytes is not None:
+                try:
+                    size_bytes = path.stat().st_size
+                except OSError as exc:
+                    logger.warning("Could not read media size for path=%s: %s", path, exc)
+                    continue
+
+                if size_bytes > max_bytes:
+                    skipped_oversized += 1
+                    logger.debug(
+                        "Skipping oversized media file path=%s size_mb=%.2f limit_mb=%s",
+                        path,
+                        size_bytes / (1024 * 1024),
+                        getattr(self.settings, "max_local_video_size_mb", 45),
+                    )
+                    continue
+
+            assets.append(path)
+
+        if skipped_oversized:
+            logger.info("Skipped %s oversized media file(s) under %s", skipped_oversized, base_path)
+        return assets
+
+    def _max_asset_bytes_for_suffixes(self, suffixes: set[str]) -> int | None:
+        if suffixes != self.VIDEO_SUFFIXES:
+            return None
+        return self._video_size_limit_bytes()
+
+    def _video_size_limit_bytes(self) -> int | None:
+        limit_mb = int(getattr(self.settings, "max_local_video_size_mb", 45) or 0)
+        if limit_mb <= 0:
+            return None
+        return limit_mb * 1024 * 1024
 
     @staticmethod
     def _sample_assets(paths: list[Path], count: int) -> list[Path]:

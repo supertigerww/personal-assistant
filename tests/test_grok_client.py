@@ -43,6 +43,12 @@ class StubOpenAIClient:
         self.images = StubImagesAPI(image_actions)
 
 
+class FakeAPIError(RuntimeError):
+    def __init__(self, message: str, *, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 def build_settings(**overrides):
     base = {
         "xai_api_key": "test-key",
@@ -95,6 +101,22 @@ async def test_generate_image_retries_and_preserves_chinese_prompt():
     assert urls == ["https://example.com/a.png"]
     assert stub_client.images.calls == 2
     assert stub_client.images.last_kwargs["prompt"] == "中文提示词"
+
+
+@pytest.mark.asyncio
+async def test_non_retryable_api_error_stops_immediately():
+    settings = build_settings()
+    client = GrokClient(settings)
+    stub_client = StubOpenAIClient(
+        response_actions=[FakeAPIError("model not found", status_code=400)],
+        image_actions=[],
+    )
+    client._client = stub_client
+
+    with pytest.raises(FakeAPIError, match="model not found"):
+        await client.create_response(input_items=[{"role": "user", "content": "hi"}], tools=[])
+
+    assert stub_client.responses.calls == 1
 
 
 def test_init_requires_basic_xai_settings():

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Literal
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramEntityTooLarge
 from aiogram.types import FSInputFile, Message
 
 from core.models import EngineResult
@@ -91,6 +92,16 @@ async def _send_single_media(
         else:
             await message.answer_photo(payload, caption=caption)
         return True
+    except TelegramEntityTooLarge as exc:
+        logger.warning(
+            "Skipped oversized %s for chat_id=%s source=%s size_mb=%s: %s",
+            kind,
+            message.chat.id,
+            source,
+            _local_file_size_mb(source) if is_local else None,
+            exc,
+        )
+        return False
     except Exception as exc:
         logger.exception(
             "Failed to send %s for chat_id=%s source=%s: %s",
@@ -120,3 +131,10 @@ def _detect_media_kind(source: str, *, default: MediaKind) -> MediaKind:
     if suffix in {".mp4", ".mov", ".mkv", ".webm"}:
         return "video"
     return default
+
+
+def _local_file_size_mb(source: str) -> float | None:
+    try:
+        return round(Path(source).stat().st_size / (1024 * 1024), 2)
+    except OSError:
+        return None

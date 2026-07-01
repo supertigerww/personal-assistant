@@ -26,6 +26,7 @@ def settings(tmp_path):
         aftercare_minutes=45,
         assets_images_path=str(tmp_path / "images"),
         assets_videos_path=str(tmp_path / "videos"),
+        max_local_video_size_mb=45,
         safewords_csv="red,红色,stop,pause,停,结束,暂停,停止,停下",
     )
 

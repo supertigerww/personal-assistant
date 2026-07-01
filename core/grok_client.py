@@ -159,13 +159,23 @@ class GrokClient:
         attempt: int,
         error: Exception,
     ) -> None:
-        if attempt > self._max_retries:
-            logger.exception(
-                "xAI %s failed after %s attempt(s): %s",
-                operation,
-                attempt,
-                error,
-            )
+        retryable = self._is_retryable_error(error)
+        if attempt > self._max_retries or not retryable:
+            if retryable:
+                logger.exception(
+                    "xAI %s failed after %s attempt(s): %s",
+                    operation,
+                    attempt,
+                    error,
+                )
+            else:
+                logger.error(
+                    "xAI %s failed with a non-retryable error on attempt %s: %s",
+                    operation,
+                    attempt,
+                    error,
+                    exc_info=error,
+                )
             raise error
 
         logger.warning(
@@ -178,6 +188,13 @@ class GrokClient:
         )
         if self._retry_delay_seconds > 0:
             await asyncio.sleep(self._retry_delay_seconds)
+
+    @staticmethod
+    def _is_retryable_error(error: Exception) -> bool:
+        status_code = getattr(error, "status_code", None)
+        if isinstance(status_code, int):
+            return status_code in {408, 409, 429} or status_code >= 500
+        return True
 
     def _normalize_payload(self, value: Any) -> Any:
         if isinstance(value, str):

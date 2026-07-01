@@ -45,7 +45,7 @@ class SafetyService:
 
     async def handle_safeword(self, profile: UserProfile) -> SafetyDecision:
         reason = "safeword"
-        logger.info(f"Safeword triggered for user {profile.telegram_user_id}, reason: {reason}")
+        logger.info("Safeword triggered for user %s, reason: %s", profile.telegram_user_id, reason)
 
         await self.task_service.pause_all_tasks(profile.telegram_user_id, reason=reason)
         aftercare_until = (

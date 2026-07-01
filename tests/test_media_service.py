@@ -110,3 +110,23 @@ async def test_should_not_generate_during_aftercare(settings, tmp_path):
 
     assert result == {"images": [], "videos": []}
     assert grok_client.prompts == []
+
+
+@pytest.mark.asyncio
+async def test_oversized_videos_are_filtered_out(settings, tmp_path):
+    settings.assets_videos_path = str(tmp_path / "videos")
+    settings.max_local_video_size_mb = 1
+
+    allowed = tmp_path / "videos" / "nested" / "small.mp4"
+    oversized = tmp_path / "videos" / "nested" / "huge.mp4"
+    allowed.parent.mkdir(parents=True, exist_ok=True)
+    allowed.write_bytes(b"x" * 1024)
+    oversized.write_bytes(b"x" * (1024 * 1024 + 1))
+
+    service = MediaService(settings=settings, grok_client=StubGrokClient())
+
+    summary = await service.asset_summary()
+    fallback = await service.get_random_assets(video_count=2)
+
+    assert summary["videos"] == 1
+    assert fallback["videos"] == [str(allowed)]
