@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     task_normal_max_turns: int = 15
     task_intense_min_turns: int = 5
     task_intense_max_turns: int = 10
+    task_offer_probability_normal: float = 0.4
+    task_offer_probability_intense: float = 0.6
+    task_retry_min_turns_normal: int = 2
+    task_retry_max_turns_normal: int = 4
+    task_retry_min_turns_intense: int = 1
+    task_retry_max_turns_intense: int = 2
     aftercare_minutes: int = Field(
         default=30,
         validation_alias=AliasChoices("AFTERCARE_MINUTES", "AFTERCARE_DURATION_MINUTES"),

@@ -1,7 +1,3 @@
-from __future__ import annotations
-
-import random
-
 import pytest
 
 from core.models import ConversationState, UserProfile
@@ -42,12 +38,12 @@ def build_profile(*, telegram_user_id: int, state: ConversationState) -> UserPro
 
 
 def test_extract_keywords_supports_chinese_and_english(settings):
-    keywords = MediaService._extract_keywords("红色 heels_2026 close-up look!")
+    keywords = MediaService._extract_keywords("\u7ea2\u8272 heels_2026 close-up look!")
 
-    assert "红色" in keywords
+    assert "\u7ea2\u8272" in keywords
     assert "heels" in keywords
     assert "2026" in keywords
-    assert "close" in keywords or "closeup" in keywords
+    assert "close" in keywords
 
 
 @pytest.mark.asyncio
@@ -132,14 +128,43 @@ async def test_get_or_generate_media_generates_when_local_match_is_weak(settings
     )
     monkeypatch.setattr(media_service_module.random, "random", lambda: 0.0)
 
+    prompt = "\u7279\u5199 \u7ea2\u8272 \u706f\u5149 close-up outfit"
     result = await service.get_or_generate_media(
-        context="特殊场景 红色灯光 close-up outfit",
+        context=prompt,
         user_id=profile.telegram_user_id,
     )
 
     assert result["images"] == ["https://example.com/generated-0.png"]
     assert result["videos"] == []
-    assert grok_client.prompts == [("特殊场景 红色灯光 close-up outfit", 1)]
+    assert grok_client.prompts == [(prompt, 1)]
+
+
+@pytest.mark.asyncio
+async def test_get_or_generate_media_skips_irrelevant_random_fallback(settings, tmp_path, monkeypatch):
+    settings.enable_image_generation = True
+    settings.assets_images_path = str(tmp_path / "images")
+    settings.assets_videos_path = str(tmp_path / "videos")
+
+    unrelated_video = tmp_path / "videos" / "general" / "sample.mp4"
+    unrelated_video.parent.mkdir(parents=True, exist_ok=True)
+    unrelated_video.write_bytes(b"x")
+
+    profile = build_profile(telegram_user_id=10, state=ConversationState.NORMAL)
+    grok_client = StubGrokClient()
+    service = MediaService(
+        settings=settings,
+        grok_client=grok_client,
+        user_service=StubUserService(profile),
+    )
+    monkeypatch.setattr(media_service_module.random, "random", lambda: 0.0)
+
+    result = await service.get_or_generate_media(
+        context="\u7ee7\u7eed\u8bf4\u8bdd\uff0c\u5feb\u4e00\u70b9",
+        user_id=profile.telegram_user_id,
+    )
+
+    assert result == {"images": [], "videos": []}
+    assert grok_client.prompts == []
 
 
 @pytest.mark.asyncio
@@ -158,7 +183,7 @@ async def test_should_not_generate_during_aftercare(settings, tmp_path, monkeypa
     monkeypatch.setattr(media_service_module.random, "random", lambda: 0.0)
 
     result = await service.get_or_generate_media(
-        context="具体场景 细节 灯光 镜头",
+        context="\u5177\u4f53 \u573a\u666f \u7ec6\u8282 \u706f\u5149 \u955c\u5934",
         user_id=profile.telegram_user_id,
     )
 

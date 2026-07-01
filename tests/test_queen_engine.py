@@ -1,5 +1,4 @@
-from __future__ import annotations
-
+from core.models import Task, TaskIntensity, TaskStatus
 from core.queen_engine import QueenEngine
 
 
@@ -38,3 +37,38 @@ def test_finalize_media_outputs_keeps_local_media_when_no_generated_images():
     assert local_images == ["assets/images/local.jpg"]
     assert local_videos == ["assets/videos/local.mp4"]
     assert generated_urls == []
+
+
+def test_build_media_context_prefers_user_text_over_model_reply():
+    task = Task(
+        id="task-1",
+        telegram_user_id=1,
+        title="fallback task",
+        instructions="fallback instructions",
+        status=TaskStatus.OPEN,
+        intensity=TaskIntensity.NORMAL,
+        created_at="2026-07-01T00:00:00Z",
+        due_at=None,
+        issued_at_turn=3,
+        completed_at=None,
+        skipped_at=None,
+        source="test",
+    )
+
+    context = QueenEngine._build_media_context(
+        user_text="red heels close-up",
+        response_text="generic reply text that should not drive media selection",
+        created_task=task,
+    )
+
+    assert context == "red heels close-up"
+
+
+def test_build_media_context_falls_back_when_user_text_is_empty():
+    context = QueenEngine._build_media_context(
+        user_text="   ",
+        response_text="visual fallback",
+        created_task=None,
+    )
+
+    assert context == "visual fallback"

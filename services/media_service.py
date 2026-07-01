@@ -40,13 +40,33 @@ class MediaService:
     IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
     VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm"}
     SPECIAL_SCENE_MARKERS = (
-        "特写", "详细", "具体", "定制", "姿势", "角度",
-        "让我看看", "发给我看", "看着这个", "对比", "幻想", "想象",
-         "寸止", "撸管", "自慰", "羞辱",
-        "母猪", "尿壶", "脚奴", "绿帽", "公开", "验证",
-        "close-up", "detailed", "specific", "pose", "angle", "show me",
-        "imagine", "kneel", "edging", "jerk", "humiliate", "degrade",
-        "cuckold", "public", "verification", "comparison",
+        "\u7279\u5199",
+        "\u7ec6\u8282",
+        "\u8be6\u7ec6",
+        "\u5177\u4f53",
+        "\u5b9a\u5236",
+        "\u59ff\u52bf",
+        "\u89d2\u5ea6",
+        "\u706f\u5149",
+        "\u670d\u88c5",
+        "\u573a\u666f",
+        "\u5730\u70b9",
+        "\u80cc\u666f",
+        "\u955c\u5934",
+        "close-up",
+        "close up",
+        "detailed",
+        "detail",
+        "specific",
+        "custom",
+        "pose",
+        "angle",
+        "lighting",
+        "outfit",
+        "location",
+        "background",
+        "scene",
+        "shot",
     )
 
     def __init__(self, *, settings: Any, grok_client: Any, user_service: Any | None = None) -> None:
@@ -121,7 +141,12 @@ class MediaService:
                         exc,
                     )
 
-            if self._should_use_random_fallback(user_id=user_id, profile=profile):
+            if self._should_use_random_fallback(
+                user_id=user_id,
+                profile=profile,
+                context=context,
+                outcome=outcome,
+            ):
                 fallback = await self.get_random_assets()
                 if fallback["images"] or fallback["videos"]:
                     logger.info("Using random local media fallback for user_id=%s", user_id)
@@ -179,10 +204,20 @@ class MediaService:
             return False
 
         if self._has_special_scene_marker(normalized):
+            logger.debug("Image generation enabled by visual scene marker for user_id=%s.", user_id)
             return True
 
-        keywords = self._extract_keywords(context)
-        return len(keywords) >= 3 or len(normalized) >= 30
+        context_terms = self._extract_context_terms(context)
+        descriptive_terms = [term for term in context_terms if len(term) >= 3]
+        decision = len(descriptive_terms) >= 2 and len(normalized) >= 18
+        logger.debug(
+            "Image generation heuristic user_id=%s terms=%s descriptive_terms=%s decision=%s",
+            user_id,
+            context_terms[:4],
+            len(descriptive_terms),
+            decision,
+        )
+        return decision
 
     def _should_attach_media(
         self,
@@ -216,7 +251,21 @@ class MediaService:
         )
         return decision
 
-    def _should_use_random_fallback(self, *, user_id: int, profile: Any | None) -> bool:
+    def _should_use_random_fallback(
+        self,
+        *,
+        user_id: int,
+        profile: Any | None,
+        context: str,
+        outcome: AssetSearchOutcome,
+    ) -> bool:
+        if outcome.keywords or self._extract_context_terms(context):
+            logger.debug(
+                "Skipping random fallback for user_id=%s because context was specific but had no strong local match.",
+                user_id,
+            )
+            return False
+
         chance = self._clamp_probability(getattr(self.settings, "media_random_fallback_probability", 0.25))
         if chance <= 0:
             return False
@@ -271,6 +320,23 @@ class MediaService:
                 break
 
         return keywords[:16]
+
+    @staticmethod
+    def _extract_context_terms(text: str) -> list[str]:
+        preserved = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff_\s-]", " ", text)
+        normalized = preserved.casefold()
+
+        terms: list[str] = []
+        for raw_token in re.split(r"[\s_-]+", normalized):
+            token = raw_token.strip()
+            if len(token) < 2 or token in terms:
+                continue
+
+            terms.append(token)
+            if len(terms) >= 12:
+                break
+
+        return terms
 
     @staticmethod
     def _expand_chinese_token(token: str) -> list[str]:

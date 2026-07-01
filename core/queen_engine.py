@@ -156,6 +156,10 @@ class QueenEngine:
             )
 
         active_task = await self.task_service.get_open_task(telegram_user_id)
+        profile, task_window_ready = await self.task_service.evaluate_task_window(
+            profile=profile,
+            active_task=active_task,
+        )
         recent_messages = await self.memory_service.recent_messages(
             telegram_user_id,
             limit=self.settings.recent_message_limit,
@@ -170,7 +174,6 @@ class QueenEngine:
             },
         )
         media_summary = await self.media_service.asset_summary()
-        task_window_ready = self.task_service.can_issue_now(profile) and active_task is None
         logger.debug(
             "Context prepared for user_id=%s state=%s task_window_ready=%s active_task=%s media=%s",
             telegram_user_id,
@@ -218,7 +221,11 @@ class QueenEngine:
             logger.warning("Model returned empty text for user_id=%s; using fallback reply.", telegram_user_id)
             response_text = self._fallback_reply(profile)
 
-        media_context = f"{response_text} {created_task.title if created_task else ''}".strip()
+        media_context = self._build_media_context(
+            user_text=text,
+            response_text=response_text,
+            created_task=created_task,
+        )
         if generated_urls:
             logger.debug(
                 "Skipping autonomous media decision for user_id=%s because tool-generated images already exist.",
@@ -511,6 +518,28 @@ class QueenEngine:
     def _is_remote_asset(value: str) -> bool:
         normalized = value.casefold()
         return normalized.startswith("http://") or normalized.startswith("https://")
+
+    @staticmethod
+    def _build_media_context(
+        *,
+        user_text: str,
+        response_text: str,
+        created_task: Task | None,
+    ) -> str:
+        primary_text = user_text.strip()
+        if primary_text:
+            return primary_text
+
+        fallback_parts: list[str] = []
+        trimmed_response = response_text.strip()
+        if trimmed_response:
+            fallback_parts.append(trimmed_response)
+
+        task_title = created_task.title.strip() if created_task and created_task.title else ""
+        if task_title:
+            fallback_parts.append(task_title)
+
+        return " ".join(fallback_parts).strip()
 
     def _finalize_media_outputs(
         self,

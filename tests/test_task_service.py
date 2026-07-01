@@ -46,3 +46,37 @@ def test_task_ack_detection(task_service):
     assert task_service.looks_like_task_response("收到，马上") is True
     assert task_service.looks_like_task_response("嗯，可以") is True
     assert task_service.looks_like_task_response("let us talk about something else") is False
+
+
+@pytest.mark.asyncio
+async def test_evaluate_task_window_can_defer_eligible_turn(settings, user_service, task_service, monkeypatch):
+    profile = await user_service.get_or_create(telegram_user_id=4, username="tester", display_name="Tester")
+    await user_service.update_next_task_turn(profile.telegram_user_id, 3)
+
+    profile = await user_service.increment_conversation_count(profile.telegram_user_id)
+    profile = await user_service.increment_conversation_count(profile.telegram_user_id)
+    profile = await user_service.increment_conversation_count(profile.telegram_user_id)
+
+    monkeypatch.setattr("services.task_service.random.random", lambda: 0.95)
+    monkeypatch.setattr("services.task_service.random.randint", lambda lower, upper: upper)
+
+    updated_profile, ready = await task_service.evaluate_task_window(profile=profile, active_task=None)
+
+    assert ready is False
+    assert updated_profile.next_task_turn == profile.conversation_count + settings.task_retry_max_turns_normal
+
+
+@pytest.mark.asyncio
+async def test_evaluate_task_window_can_open_eligible_turn(user_service, task_service, monkeypatch):
+    profile = await user_service.get_or_create(telegram_user_id=5, username="tester", display_name="Tester")
+    await user_service.update_next_task_turn(profile.telegram_user_id, 2)
+
+    profile = await user_service.increment_conversation_count(profile.telegram_user_id)
+    profile = await user_service.increment_conversation_count(profile.telegram_user_id)
+
+    monkeypatch.setattr("services.task_service.random.random", lambda: 0.0)
+
+    updated_profile, ready = await task_service.evaluate_task_window(profile=profile, active_task=None)
+
+    assert ready is True
+    assert updated_profile.next_task_turn == profile.next_task_turn

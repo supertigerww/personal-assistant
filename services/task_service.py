@@ -56,6 +56,42 @@ class TaskService:
         await self.user_service.update_next_task_turn(telegram_user_id, next_turn)
         return next_turn
 
+    async def evaluate_task_window(
+        self,
+        *,
+        profile: UserProfile,
+        active_task: Task | None,
+    ) -> tuple[UserProfile, bool]:
+        if active_task is not None:
+            return profile, False
+        if not self.can_issue_now(profile):
+            return profile, False
+
+        chance = self._task_offer_probability(profile.state)
+        roll = random.random()
+        if roll < chance:
+            logger.info(
+                "Task window opened for user %s at turn=%s chance=%.2f roll=%.2f",
+                profile.telegram_user_id,
+                profile.conversation_count,
+                chance,
+                roll,
+            )
+            return profile, True
+
+        retry_interval = self._pick_retry_interval(profile.state)
+        next_turn = profile.conversation_count + retry_interval
+        await self.user_service.update_next_task_turn(profile.telegram_user_id, next_turn)
+        logger.info(
+            "Deferred task window for user %s from turn=%s to next_task_turn=%s chance=%.2f roll=%.2f",
+            profile.telegram_user_id,
+            profile.conversation_count,
+            next_turn,
+            chance,
+            roll,
+        )
+        return await self.user_service.get_profile(profile.telegram_user_id), False
+
     def can_issue_now(self, profile: UserProfile) -> bool:
         if profile.state in {ConversationState.AFTERCARE, ConversationState.PAUSED}:
             return False
@@ -192,6 +228,23 @@ class TaskService:
         lower_bound = max(8, int(self.settings.task_normal_min_turns))
         upper_bound = max(lower_bound, max(15, int(self.settings.task_normal_max_turns)))
         return random.randint(lower_bound, upper_bound)
+
+    def _pick_retry_interval(self, state: str) -> int:
+        if state == ConversationState.INTENSE:
+            lower_bound = max(1, int(getattr(self.settings, "task_retry_min_turns_intense", 1)))
+            upper_bound = max(lower_bound, int(getattr(self.settings, "task_retry_max_turns_intense", 2)))
+            return random.randint(lower_bound, upper_bound)
+
+        lower_bound = max(1, int(getattr(self.settings, "task_retry_min_turns_normal", 2)))
+        upper_bound = max(lower_bound, int(getattr(self.settings, "task_retry_max_turns_normal", 4)))
+        return random.randint(lower_bound, upper_bound)
+
+    def _task_offer_probability(self, state: str) -> float:
+        if state == ConversationState.INTENSE:
+            raw_value = getattr(self.settings, "task_offer_probability_intense", 0.6)
+        else:
+            raw_value = getattr(self.settings, "task_offer_probability_normal", 0.4)
+        return max(0.0, min(1.0, float(raw_value)))
 
     @staticmethod
     def _row_to_task(row: Any) -> Task:
