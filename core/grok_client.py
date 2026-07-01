@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
+from uuid import uuid4
 
 from openai import AsyncOpenAI
 
@@ -92,13 +97,13 @@ class GrokClient:
                     prompt=normalized_prompt,
                     n=requested_count,
                 )
-                urls = [item.url for item in response.data if getattr(item, "url", None)]
+                sources = await self._extract_generated_image_sources(response)
                 logger.info(
-                    "xAI images.generate succeeded attempt=%s generated_urls=%s",
+                    "xAI images.generate succeeded attempt=%s generated_images=%s",
                     attempt,
-                    len(urls),
+                    len(sources),
                 )
-                return urls
+                return sources
             except Exception as exc:
                 await self._handle_retryable_error(
                     operation="images.generate",
@@ -151,6 +156,94 @@ class GrokClient:
 
         if missing_fields:
             raise RuntimeError(f"Missing required xAI settings: {', '.join(missing_fields)}")
+
+    async def _extract_generated_image_sources(self, response: Any) -> list[str]:
+        sources: list[str] = []
+        for index, item in enumerate(getattr(response, "data", []) or [], start=1):
+            source = await self._materialize_generated_image(item=item, index=index)
+            if source:
+                sources.append(source)
+        return sources
+
+    async def _materialize_generated_image(self, *, item: Any, index: int) -> str | None:
+        b64_json = self._response_field(item, "b64_json")
+        if isinstance(b64_json, str) and b64_json.strip():
+            try:
+                image_bytes = base64.b64decode(b64_json)
+                saved_path = await self._save_generated_image(
+                    image_bytes=image_bytes,
+                    content_type="image/png",
+                    source_name=f"inline-{index}.png",
+                )
+                logger.info("Saved inline generated image item=%s path=%s", index, saved_path)
+                return saved_path
+            except Exception as exc:
+                logger.warning("Failed to decode inline generated image item=%s: %s", index, exc)
+
+        url = self._response_field(item, "url")
+        if isinstance(url, str) and url.strip():
+            cleaned_url = url.strip()
+            try:
+                image_bytes, content_type = await self._download_generated_image(cleaned_url)
+                saved_path = await self._save_generated_image(
+                    image_bytes=image_bytes,
+                    content_type=content_type,
+                    source_name=cleaned_url,
+                )
+                logger.info("Downloaded generated image item=%s path=%s", index, saved_path)
+                return saved_path
+            except Exception as exc:
+                logger.warning(
+                    "Failed to download generated image item=%s url=%s: %s. Falling back to remote URL.",
+                    index,
+                    cleaned_url,
+                    exc,
+                )
+                return cleaned_url
+
+        logger.warning("Generated image item=%s did not include a supported payload.", index)
+        return None
+
+    async def _download_generated_image(self, url: str) -> tuple[bytes, str | None]:
+        return await asyncio.to_thread(self._download_generated_image_sync, url)
+
+    def _download_generated_image_sync(self, url: str) -> tuple[bytes, str | None]:
+        request = Request(url, headers={"User-Agent": "queen-bot/1.0"})
+        with urlopen(request, timeout=30) as response:
+            data = response.read()
+            content_type = response.headers.get_content_type() if response.headers else None
+        return data, content_type
+
+    async def _save_generated_image(
+        self,
+        *,
+        image_bytes: bytes,
+        content_type: str | None,
+        source_name: str,
+    ) -> str:
+        return await asyncio.to_thread(
+            self._save_generated_image_sync,
+            image_bytes,
+            content_type,
+            source_name,
+        )
+
+    def _save_generated_image_sync(self, image_bytes: bytes, content_type: str | None, source_name: str) -> str:
+        output_dir = self._generated_images_dir()
+        suffix = (
+            self._suffix_from_content_type(content_type)
+            or self._suffix_from_url(source_name)
+            or self._guess_image_suffix(image_bytes)
+            or ".png"
+        )
+        output_path = output_dir / f"grok_{uuid4().hex}{suffix}"
+        output_path.write_bytes(image_bytes)
+        return str(output_path)
+
+    def _generated_images_dir(self) -> Path:
+        path = Path(getattr(self.settings, "generated_images_path", "data/generated_images"))
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     async def _handle_retryable_error(
         self,
@@ -211,3 +304,42 @@ class GrokClient:
     def _normalize_text(text: str) -> str:
         sanitized = text.replace("\x00", "").replace("\ufeff", "")
         return sanitized.encode("utf-8", errors="ignore").decode("utf-8")
+
+    @staticmethod
+    def _response_field(item: Any, field_name: str) -> Any:
+        if isinstance(item, dict):
+            return item.get(field_name)
+        return getattr(item, field_name, None)
+
+    @staticmethod
+    def _suffix_from_content_type(content_type: str | None) -> str | None:
+        mapping = {
+            "image/png": ".png",
+            "image/jpeg": ".jpg",
+            "image/jpg": ".jpg",
+            "image/webp": ".webp",
+            "image/gif": ".gif",
+        }
+        if not content_type:
+            return None
+        return mapping.get(content_type.casefold())
+
+    @staticmethod
+    def _suffix_from_url(source_name: str) -> str | None:
+        path = urlparse(source_name).path if "://" in source_name else source_name
+        suffix = Path(path).suffix.casefold()
+        if suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+            return ".jpg" if suffix == ".jpeg" else suffix
+        return None
+
+    @staticmethod
+    def _guess_image_suffix(image_bytes: bytes) -> str | None:
+        if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+            return ".png"
+        if image_bytes.startswith(b"\xff\xd8\xff"):
+            return ".jpg"
+        if image_bytes.startswith(b"GIF87a") or image_bytes.startswith(b"GIF89a"):
+            return ".gif"
+        if image_bytes.startswith(b"RIFF") and image_bytes[8:12] == b"WEBP":
+            return ".webp"
+        return None

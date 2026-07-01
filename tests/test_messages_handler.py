@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from core.models import ConversationState, EngineResult
 from bot.handlers.messages import _build_media_items, _detect_media_kind
+from core.models import ConversationState, EngineResult
 
 
 def test_detect_media_kind_supports_gif_and_video():
@@ -26,4 +26,18 @@ def test_build_media_items_preserves_expected_order():
         ("animation", "assets/images/loop.gif", True),
         ("video", "assets/videos/clip.mp4", True),
         ("photo", "https://example.com/generated.png", False),
+    ]
+
+
+def test_build_media_items_treats_local_generated_images_as_local_files():
+    result = EngineResult(
+        text="reply",
+        state=ConversationState.NORMAL,
+        generated_image_urls=["data/generated_images/generated.png"],
+    )
+
+    items = _build_media_items(result)
+
+    assert items == [
+        ("photo", "data/generated_images/generated.png", True),
     ]

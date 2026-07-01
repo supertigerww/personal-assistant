@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import base64
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from core.grok_client import GrokClient
+
+
+PNG_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0JcAAAAASUVORK5CYII="
+)
 
 
 class StubResponsesAPI:
@@ -58,6 +65,7 @@ def build_settings(**overrides):
         "xai_max_retries": 1,
         "xai_retry_delay_seconds": 0.0,
         "enable_image_generation": True,
+        "generated_images_path": "data/generated-images-test",
     }
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -74,33 +82,63 @@ async def test_create_response_retries_and_normalizes_input():
     client._client = stub_client
 
     response = await client.create_response(
-        input_items=[{"role": "user", "content": "你好\x00 world"}],
+        input_items=[{"role": "user", "content": "\u4f60\u597d\x00 world"}],
         tools=[],
     )
 
     assert response.id == "resp-1"
     assert stub_client.responses.calls == 2
-    assert stub_client.responses.last_kwargs["input"][0]["content"] == "你好 world"
+    assert stub_client.responses.last_kwargs["input"][0]["content"] == "\u4f60\u597d world"
 
 
 @pytest.mark.asyncio
-async def test_generate_image_retries_and_preserves_chinese_prompt():
-    settings = build_settings()
+async def test_generate_image_downloads_remote_url_to_local_file(tmp_path):
+    settings = build_settings(generated_images_path=str(tmp_path))
+    client = GrokClient(settings)
+    stub_client = StubOpenAIClient(
+        response_actions=[],
+        image_actions=[SimpleNamespace(data=[SimpleNamespace(url="https://example.com/a.png")])],
+    )
+    client._client = stub_client
+
+    async def fake_download(url: str) -> tuple[bytes, str | None]:
+        assert url == "https://example.com/a.png"
+        return PNG_BYTES, "image/png"
+
+    client._download_generated_image = fake_download  # type: ignore[method-assign]
+
+    sources = await client.generate_image(prompt="\u4e2d\u6587\u63d0\u793a\u8bcd", count=1)
+
+    assert len(sources) == 1
+    output_path = Path(sources[0])
+    assert output_path.exists()
+    assert output_path.suffix == ".png"
+    assert output_path.read_bytes() == PNG_BYTES
+    assert stub_client.images.calls == 1
+    assert stub_client.images.last_kwargs["prompt"] == "\u4e2d\u6587\u63d0\u793a\u8bcd"
+
+
+@pytest.mark.asyncio
+async def test_generate_image_supports_b64_payloads(tmp_path):
+    settings = build_settings(generated_images_path=str(tmp_path))
     client = GrokClient(settings)
     stub_client = StubOpenAIClient(
         response_actions=[],
         image_actions=[
-            RuntimeError("temporary failure"),
-            SimpleNamespace(data=[SimpleNamespace(url="https://example.com/a.png")]),
+            SimpleNamespace(
+                data=[SimpleNamespace(b64_json=base64.b64encode(PNG_BYTES).decode("ascii"))]
+            )
         ],
     )
     client._client = stub_client
 
-    urls = await client.generate_image(prompt="中文提示词", count=1)
+    sources = await client.generate_image(prompt="\u4e2d\u6587\u63d0\u793a\u8bcd", count=1)
 
-    assert urls == ["https://example.com/a.png"]
-    assert stub_client.images.calls == 2
-    assert stub_client.images.last_kwargs["prompt"] == "中文提示词"
+    assert len(sources) == 1
+    output_path = Path(sources[0])
+    assert output_path.exists()
+    assert output_path.suffix == ".png"
+    assert output_path.read_bytes() == PNG_BYTES
 
 
 @pytest.mark.asyncio

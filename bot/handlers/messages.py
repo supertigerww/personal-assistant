@@ -54,8 +54,14 @@ def _build_media_items(result: EngineResult) -> list[MediaItem]:
     for video_path in result.local_video_paths:
         items.append((_detect_media_kind(video_path, default="video"), video_path, True))
 
-    for image_url in result.generated_image_urls:
-        items.append((_detect_media_kind(image_url, default="photo"), image_url, False))
+    for image_source in result.generated_image_urls:
+        items.append(
+            (
+                _detect_media_kind(image_source, default="photo"),
+                image_source,
+                not _is_remote_source(image_source),
+            )
+        )
 
     return items
 
@@ -131,6 +137,11 @@ def _detect_media_kind(source: str, *, default: MediaKind) -> MediaKind:
     if suffix in {".mp4", ".mov", ".mkv", ".webm"}:
         return "video"
     return default
+
+
+def _is_remote_source(source: str) -> bool:
+    normalized = source.casefold()
+    return normalized.startswith("http://") or normalized.startswith("https://")
 
 
 def _local_file_size_mb(source: str) -> float | None:
