@@ -230,11 +230,11 @@ class QueenEngine:
                 user_id=telegram_user_id,
             )
 
-        local_images = [item for item in media_bundle["images"] if not self._is_remote_asset(item)]
-        media_generated_urls = [item for item in media_bundle["images"] if self._is_remote_asset(item)]
-        for url in media_generated_urls:
-            if url not in generated_urls:
-                generated_urls.append(url)
+        local_images, local_videos, generated_urls = self._finalize_media_outputs(
+            media_bundle=media_bundle,
+            generated_urls=generated_urls,
+            user_id=telegram_user_id,
+        )
 
         latest_profile = await self.user_service.get_profile(telegram_user_id)
         logger.info(
@@ -243,7 +243,7 @@ class QueenEngine:
             latest_profile.state,
             created_task.id if created_task else None,
             len(local_images),
-            len(media_bundle["videos"]),
+            len(local_videos),
             len(generated_urls),
         )
         await self._store_message(
@@ -254,7 +254,7 @@ class QueenEngine:
                 "task_id": created_task.id if created_task else None,
                 "generated_image_urls": generated_urls,
                 "local_images": local_images,
-                "local_videos": media_bundle["videos"],
+                "local_videos": local_videos,
                 "state": str(latest_profile.state),
             },
         )
@@ -263,7 +263,7 @@ class QueenEngine:
             state=latest_profile.state,
             task=created_task,
             local_image_paths=local_images,
-            local_video_paths=media_bundle["videos"],
+            local_video_paths=local_videos,
             generated_image_urls=generated_urls,
         )
 
@@ -510,6 +510,31 @@ class QueenEngine:
     def _is_remote_asset(value: str) -> bool:
         normalized = value.casefold()
         return normalized.startswith("http://") or normalized.startswith("https://")
+
+    def _finalize_media_outputs(
+        self,
+        *,
+        media_bundle: dict[str, list[str]],
+        generated_urls: list[str],
+        user_id: int,
+    ) -> tuple[list[str], list[str], list[str]]:
+        local_images = [item for item in media_bundle.get("images", []) if not self._is_remote_asset(item)]
+        local_videos = media_bundle.get("videos", [])[:]
+        merged_generated_urls = self._dedupe_strings(
+            generated_urls + [item for item in media_bundle.get("images", []) if self._is_remote_asset(item)]
+        )
+
+        if merged_generated_urls and (local_images or local_videos):
+            logger.info(
+                "Dropping local media for user_id=%s because generated images are present. local_images=%s local_videos=%s generated_images=%s",
+                user_id,
+                len(local_images),
+                len(local_videos),
+                len(merged_generated_urls),
+            )
+            return [], [], merged_generated_urls
+
+        return local_images, local_videos, merged_generated_urls
 
     @staticmethod
     def _should_generate_image(profile: UserProfile) -> bool:

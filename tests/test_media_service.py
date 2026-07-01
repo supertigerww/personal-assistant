@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import random
+
 import pytest
 
 from core.models import ConversationState, UserProfile
+from services import media_service as media_service_module
 from services.media_service import MediaService
 
 
@@ -63,10 +66,59 @@ async def test_pick_relevant_assets_prioritizes_matching_subfolder(settings, tmp
     result = await service.pick_relevant_assets(text="heels")
 
     assert result["images"] == [str(folder_match)]
+    assert result["videos"] == []
 
 
 @pytest.mark.asyncio
-async def test_get_or_generate_media_generates_when_local_match_is_weak(settings, tmp_path):
+async def test_get_or_generate_media_can_skip_media_when_probability_gate_blocks(settings, tmp_path, monkeypatch):
+    settings.assets_images_path = str(tmp_path / "images")
+    settings.assets_videos_path = str(tmp_path / "videos")
+
+    image = tmp_path / "images" / "heels" / "frame01.jpg"
+    image.parent.mkdir(parents=True, exist_ok=True)
+    image.write_text("x", encoding="utf-8")
+
+    profile = build_profile(telegram_user_id=7, state=ConversationState.NORMAL)
+    service = MediaService(
+        settings=settings,
+        grok_client=StubGrokClient(),
+        user_service=StubUserService(profile),
+    )
+    monkeypatch.setattr(media_service_module.random, "random", lambda: 0.99)
+
+    result = await service.get_or_generate_media(context="heels", user_id=profile.telegram_user_id)
+
+    assert result == {"images": [], "videos": []}
+
+
+@pytest.mark.asyncio
+async def test_get_or_generate_media_returns_single_best_asset(settings, tmp_path, monkeypatch):
+    settings.assets_images_path = str(tmp_path / "images")
+    settings.assets_videos_path = str(tmp_path / "videos")
+
+    best_image = tmp_path / "images" / "heels" / "frame01.jpg"
+    weaker_video = tmp_path / "videos" / "general" / "heels.mp4"
+    best_image.parent.mkdir(parents=True, exist_ok=True)
+    weaker_video.parent.mkdir(parents=True, exist_ok=True)
+    best_image.write_text("x", encoding="utf-8")
+    weaker_video.write_text("x", encoding="utf-8")
+
+    profile = build_profile(telegram_user_id=8, state=ConversationState.NORMAL)
+    service = MediaService(
+        settings=settings,
+        grok_client=StubGrokClient(),
+        user_service=StubUserService(profile),
+    )
+    monkeypatch.setattr(media_service_module.random, "random", lambda: 0.0)
+
+    result = await service.get_or_generate_media(context="heels", user_id=profile.telegram_user_id)
+
+    assert result["images"] == [str(best_image)]
+    assert result["videos"] == []
+
+
+@pytest.mark.asyncio
+async def test_get_or_generate_media_generates_when_local_match_is_weak(settings, tmp_path, monkeypatch):
     settings.enable_image_generation = True
     settings.assets_images_path = str(tmp_path / "images")
     settings.assets_videos_path = str(tmp_path / "videos")
@@ -78,6 +130,7 @@ async def test_get_or_generate_media_generates_when_local_match_is_weak(settings
         grok_client=grok_client,
         user_service=StubUserService(profile),
     )
+    monkeypatch.setattr(media_service_module.random, "random", lambda: 0.0)
 
     result = await service.get_or_generate_media(
         context="特殊场景 红色灯光 close-up outfit",
@@ -90,7 +143,7 @@ async def test_get_or_generate_media_generates_when_local_match_is_weak(settings
 
 
 @pytest.mark.asyncio
-async def test_should_not_generate_during_aftercare(settings, tmp_path):
+async def test_should_not_generate_during_aftercare(settings, tmp_path, monkeypatch):
     settings.enable_image_generation = True
     settings.assets_images_path = str(tmp_path / "images")
     settings.assets_videos_path = str(tmp_path / "videos")
@@ -102,6 +155,7 @@ async def test_should_not_generate_during_aftercare(settings, tmp_path):
         grok_client=grok_client,
         user_service=StubUserService(profile),
     )
+    monkeypatch.setattr(media_service_module.random, "random", lambda: 0.0)
 
     result = await service.get_or_generate_media(
         context="具体场景 细节 灯光 镜头",
@@ -130,3 +184,4 @@ async def test_oversized_videos_are_filtered_out(settings, tmp_path):
 
     assert summary["videos"] == 1
     assert fallback["videos"] == [str(allowed)]
+    assert fallback["images"] == []

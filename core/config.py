@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     assets_images_path: str = "assets/images"
     assets_videos_path: str = "assets/videos"
     max_local_video_size_mb: int = 45
+    media_send_probability_normal: float = 0.35
+    media_send_probability_intense: float = 0.55
+    media_send_probability_aftercare: float = 0.0
+    media_send_probability_paused: float = 0.0
+    media_random_fallback_probability: float = 0.25
+    media_max_items_per_message: int = 1
     safewords_csv: str = Field(default="red,红色,stop,pause,停,结束,暂停,停止,停下")
 
     @property

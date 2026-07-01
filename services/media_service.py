@@ -100,10 +100,20 @@ class MediaService:
 
     async def get_or_generate_media(self, *, context: str, user_id: int) -> dict[str, list[str]]:
         try:
+            profile = await self._safe_get_profile(user_id)
             outcome = self._search_assets(context)
-            local_payload = self._outcome_to_payload(outcome)
 
-            if self._is_good_match(outcome, context):
+            if not self._should_attach_media(
+                context=context,
+                user_id=user_id,
+                profile=profile,
+                outcome=outcome,
+            ):
+                logger.info("Skipped automatic media for user_id=%s after probability gate.", user_id)
+                return {"images": [], "videos": []}
+
+            local_payload = self._outcome_to_payload(outcome)
+            if self._is_good_match(outcome, context) and (local_payload["images"] or local_payload["videos"]):
                 logger.info(
                     "Using strong local media match for user_id=%s with score=%s",
                     user_id,
@@ -111,12 +121,12 @@ class MediaService:
                 )
                 return local_payload
 
-            if await self._should_generate(context, user_id):
+            if await self._should_generate(context, user_id, profile=profile):
                 try:
                     images = await self.generate_scene_image(prompt=context)
                     if images:
                         logger.info("Generated supplemental images for user_id=%s", user_id)
-                        return {"images": images, "videos": []}
+                        return self._compact_payload(images=images, videos=[], prefer_random=False)
                 except Exception as exc:
                     logger.exception(
                         "Failed to generate supplemental image for user_id=%s: %s",
@@ -124,13 +134,14 @@ class MediaService:
                         exc,
                     )
 
-            fallback = await self.get_random_assets()
-            if fallback["images"] or fallback["videos"]:
-                logger.info("Using random local media fallback for user_id=%s", user_id)
-                return fallback
+            if self._should_use_random_fallback(user_id=user_id, profile=profile):
+                fallback = await self.get_random_assets()
+                if fallback["images"] or fallback["videos"]:
+                    logger.info("Using random local media fallback for user_id=%s", user_id)
+                    return fallback
 
-            logger.debug("No random fallback assets available; returning best-effort local payload.")
-            return local_payload
+            logger.debug("No automatic media selected for user_id=%s after fallback checks.", user_id)
+            return {"images": [], "videos": []}
         except Exception as exc:
             logger.exception("Failed to resolve media for user_id=%s: %s", user_id, exc)
             return {"images": [], "videos": []}
@@ -139,12 +150,9 @@ class MediaService:
         try:
             image_candidates = self._list_assets(self.images_path, self.IMAGE_SUFFIXES)
             video_candidates = self._list_assets(self.videos_path, self.VIDEO_SUFFIXES)
-            selected_images = self._sample_assets(image_candidates, image_count)
-            selected_videos = self._sample_assets(video_candidates, video_count)
-            return {
-                "images": [str(path) for path in selected_images],
-                "videos": [str(path) for path in selected_videos],
-            }
+            selected_images = [str(path) for path in self._sample_assets(image_candidates, image_count)]
+            selected_videos = [str(path) for path in self._sample_assets(video_candidates, video_count)]
+            return self._compact_payload(images=selected_images, videos=selected_videos, prefer_random=True)
         except Exception as exc:
             logger.exception("Failed to load random assets: %s", exc)
             return {"images": [], "videos": []}
@@ -162,14 +170,21 @@ class MediaService:
             logger.exception("Image generation request failed: %s", exc)
             raise
 
-    async def _should_generate(self, context: str, user_id: int) -> bool:
+    async def _should_generate(
+        self,
+        context: str,
+        user_id: int,
+        *,
+        profile: Any | None = None,
+    ) -> bool:
         if not self.settings.enable_image_generation:
             logger.debug("Image generation is disabled in settings.")
             return False
 
-        profile = await self._safe_get_profile(user_id)
-        if profile is not None and profile.state == ConversationState.AFTERCARE:
-            logger.info("Skipping image generation for user_id=%s because state is aftercare.", user_id)
+        if profile is None:
+            profile = await self._safe_get_profile(user_id)
+        if profile is not None and profile.state in {ConversationState.AFTERCARE, ConversationState.PAUSED}:
+            logger.info("Skipping image generation for user_id=%s because state=%s.", user_id, profile.state)
             return False
 
         normalized = context.strip().casefold()
@@ -177,10 +192,73 @@ class MediaService:
             return False
 
         keywords = self._extract_keywords(context)
-        if any(marker in normalized for marker in self.SPECIAL_SCENE_MARKERS):
+        if self._has_special_scene_marker(normalized):
             return True
 
         return len(keywords) >= 2 or len(normalized) >= 24
+
+    def _should_attach_media(
+        self,
+        *,
+        context: str,
+        user_id: int,
+        profile: Any | None,
+        outcome: AssetSearchOutcome,
+    ) -> bool:
+        chance = self._media_send_probability(profile)
+        if chance <= 0:
+            logger.debug("Automatic media disabled by state for user_id=%s.", user_id)
+            return False
+
+        normalized = context.strip().casefold()
+        if self._is_good_match(outcome, context):
+            chance = min(1.0, chance + 0.15)
+        if self._has_special_scene_marker(normalized):
+            chance = min(1.0, chance + 0.10)
+
+        roll = random.random()
+        decision = roll < chance
+        logger.debug(
+            "Automatic media gate user_id=%s state=%s chance=%.2f roll=%.2f best_score=%s decision=%s",
+            user_id,
+            getattr(profile, "state", ConversationState.NORMAL),
+            chance,
+            roll,
+            outcome.best_score,
+            decision,
+        )
+        return decision
+
+    def _should_use_random_fallback(self, *, user_id: int, profile: Any | None) -> bool:
+        chance = self._clamp_probability(getattr(self.settings, "media_random_fallback_probability", 0.25))
+        if chance <= 0:
+            return False
+
+        roll = random.random()
+        decision = roll < chance
+        logger.debug(
+            "Random fallback media gate user_id=%s state=%s chance=%.2f roll=%.2f decision=%s",
+            user_id,
+            getattr(profile, "state", ConversationState.NORMAL),
+            chance,
+            roll,
+            decision,
+        )
+        return decision
+
+    def _media_send_probability(self, profile: Any | None) -> float:
+        state = getattr(profile, "state", ConversationState.NORMAL)
+        if state == ConversationState.INTENSE:
+            return self._clamp_probability(getattr(self.settings, "media_send_probability_intense", 0.55))
+        if state == ConversationState.AFTERCARE:
+            return self._clamp_probability(getattr(self.settings, "media_send_probability_aftercare", 0.0))
+        if state == ConversationState.PAUSED:
+            return self._clamp_probability(getattr(self.settings, "media_send_probability_paused", 0.0))
+        return self._clamp_probability(getattr(self.settings, "media_send_probability_normal", 0.35))
+
+    @staticmethod
+    def _clamp_probability(value: float) -> float:
+        return max(0.0, min(1.0, float(value)))
 
     @staticmethod
     def _extract_keywords(text: str) -> list[str]:
@@ -293,10 +371,28 @@ class MediaService:
         )
 
     def _outcome_to_payload(self, outcome: AssetSearchOutcome) -> dict[str, list[str]]:
-        return {
-            "images": [str(candidate.path) for candidate in outcome.images[:1]],
-            "videos": [str(candidate.path) for candidate in outcome.videos[:1]],
-        }
+        ranked: list[tuple[str, AssetCandidate]] = [("image", item) for item in outcome.images]
+        ranked.extend(("video", item) for item in outcome.videos)
+        if not ranked:
+            return {"images": [], "videos": []}
+
+        ranked.sort(key=lambda item: item[1].score, reverse=True)
+        limit = self._max_media_items_per_message()
+        if limit <= 0:
+            return {"images": [], "videos": []}
+
+        selected: list[tuple[str, AssetCandidate]]
+        if limit == 1:
+            best_score = ranked[0][1].score
+            top_choices = [item for item in ranked if item[1].score == best_score]
+            selected = [random.choice(top_choices)]
+        else:
+            selected = ranked[:limit]
+
+        payload = {"images": [], "videos": []}
+        for kind, candidate in selected:
+            payload["images" if kind == "image" else "videos"].append(str(candidate.path))
+        return payload
 
     @staticmethod
     def _has_scored_match(outcome: AssetSearchOutcome) -> bool:
@@ -375,6 +471,39 @@ class MediaService:
         if skipped_oversized:
             logger.info("Skipped %s oversized media file(s) under %s", skipped_oversized, base_path)
         return assets
+
+    def _compact_payload(
+        self,
+        *,
+        images: list[str],
+        videos: list[str],
+        prefer_random: bool,
+    ) -> dict[str, list[str]]:
+        limit = self._max_media_items_per_message()
+        if limit <= 0:
+            return {"images": [], "videos": []}
+
+        combined: list[tuple[str, str]] = [("image", path) for path in images]
+        combined.extend(("video", path) for path in videos)
+        if len(combined) <= limit:
+            return {"images": images[:], "videos": videos[:]}
+
+        if prefer_random:
+            selected = random.sample(combined, limit)
+        else:
+            selected = combined[:limit]
+
+        payload = {"images": [], "videos": []}
+        for kind, path in selected:
+            payload["images" if kind == "image" else "videos"].append(path)
+        return payload
+
+    def _max_media_items_per_message(self) -> int:
+        return max(0, int(getattr(self.settings, "media_max_items_per_message", 1)))
+
+    @staticmethod
+    def _has_special_scene_marker(normalized_context: str) -> bool:
+        return any(marker in normalized_context for marker in MediaService.SPECIAL_SCENE_MARKERS)
 
     def _max_asset_bytes_for_suffixes(self, suffixes: set[str]) -> int | None:
         if suffixes != self.VIDEO_SUFFIXES:

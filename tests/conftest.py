@@ -27,6 +27,12 @@ def settings(tmp_path):
         assets_images_path=str(tmp_path / "images"),
         assets_videos_path=str(tmp_path / "videos"),
         max_local_video_size_mb=45,
+        media_send_probability_normal=0.35,
+        media_send_probability_intense=0.55,
+        media_send_probability_aftercare=0.0,
+        media_send_probability_paused=0.0,
+        media_random_fallback_probability=0.25,
+        media_max_items_per_message=1,
         safewords_csv="red,红色,stop,pause,停,结束,暂停,停止,停下",
     )
 
