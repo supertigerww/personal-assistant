@@ -140,6 +140,32 @@ async def test_get_or_generate_media_generates_when_local_match_is_weak(settings
 
 
 @pytest.mark.asyncio
+async def test_get_or_generate_media_bypasses_probability_gate_for_generation(settings, tmp_path, monkeypatch):
+    settings.enable_image_generation = True
+    settings.assets_images_path = str(tmp_path / "images")
+    settings.assets_videos_path = str(tmp_path / "videos")
+
+    profile = build_profile(telegram_user_id=12, state=ConversationState.NORMAL)
+    grok_client = StubGrokClient()
+    service = MediaService(
+        settings=settings,
+        grok_client=grok_client,
+        user_service=StubUserService(profile),
+    )
+    monkeypatch.setattr(media_service_module.random, "random", lambda: 0.99)
+
+    prompt = "\u7279\u5199 \u9ed1\u8272 heels lighting angle"
+    result = await service.get_or_generate_media(
+        context=prompt,
+        user_id=profile.telegram_user_id,
+    )
+
+    assert result["images"] == ["https://example.com/generated-0.png"]
+    assert result["videos"] == []
+    assert grok_client.prompts == [(prompt, 1)]
+
+
+@pytest.mark.asyncio
 async def test_get_or_generate_media_skips_irrelevant_random_fallback(settings, tmp_path, monkeypatch):
     settings.enable_image_generation = True
     settings.assets_images_path = str(tmp_path / "images")

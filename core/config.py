@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     )
     assets_images_path: str = "assets/images"
     assets_videos_path: str = "assets/videos"
+    generated_images_path: str = "data/generated_images"
     max_local_video_size_mb: int = 45
     media_send_probability_normal: float = 0.35
     media_send_probability_intense: float = 0.55

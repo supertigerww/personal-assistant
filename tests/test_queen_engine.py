@@ -72,3 +72,15 @@ def test_build_media_context_falls_back_when_user_text_is_empty():
     )
 
     assert context == "visual fallback"
+
+
+def test_sanitize_response_text_removes_generation_placeholders():
+    cleaned = QueenEngine._sanitize_response_text("先看着。\n（生成中...）")
+
+    assert cleaned == "先看着。"
+
+
+def test_sanitize_response_text_can_return_empty_for_placeholder_only():
+    cleaned = QueenEngine._sanitize_response_text("（图片生成中……）")
+
+    assert cleaned == ""

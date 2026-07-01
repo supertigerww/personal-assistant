@@ -39,6 +39,20 @@ class AssetSearchOutcome:
 class MediaService:
     IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
     VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm"}
+    EXPLICIT_MEDIA_MARKERS = (
+        "\u56fe",
+        "\u56fe\u7247",
+        "\u7167\u7247",
+        "\u6765\u5f20\u56fe",
+        "\u53d1\u5f20\u56fe",
+        "\u53d1\u56fe",
+        "\u6765\u5f20",
+        "image",
+        "images",
+        "photo",
+        "picture",
+        "pic",
+    )
     SPECIAL_SCENE_MARKERS = (
         "\u7279\u5199",
         "\u7ec6\u8282",
@@ -78,9 +92,11 @@ class MediaService:
         self._prepare_media_root(self.images_path, label="images")
         self._prepare_media_root(self.videos_path, label="videos")
         logger.info(
-            "MediaService configured for recursive asset scan. images_path=%s videos_path=%s",
+            "MediaService configured for recursive asset scan. images_path=%s videos_path=%s image_generation_enabled=%s generated_images_path=%s",
             self.images_path,
             self.videos_path,
+            bool(getattr(self.settings, "enable_image_generation", False)),
+            getattr(self.settings, "generated_images_path", "data/generated_images"),
         )
 
     async def asset_summary(self) -> dict[str, int]:
@@ -109,6 +125,66 @@ class MediaService:
         try:
             profile = await self._safe_get_profile(user_id)
             outcome = self._search_assets(context)
+            local_payload = self._outcome_to_payload(outcome)
+            normalized = context.strip().casefold()
+            has_explicit_request = self._has_explicit_media_request(normalized)
+            strong_local_match = self._is_good_match(outcome, context) and (local_payload["images"] or local_payload["videos"])
+            should_generate = await self._should_generate(context, user_id, profile=profile)
+
+            logger.info(
+                "Media decision user_id=%s explicit_request=%s strong_local_match=%s should_generate=%s best_score=%s",
+                user_id,
+                has_explicit_request,
+                bool(strong_local_match),
+                should_generate,
+                outcome.best_score,
+            )
+
+            if has_explicit_request and strong_local_match:
+                logger.info("Using local media for explicit media request user_id=%s", user_id)
+                return local_payload
+
+            if should_generate:
+                try:
+                    images = await self.generate_scene_image(prompt=context)
+                    if images:
+                        logger.info(
+                            "Generated supplemental images for user_id=%s reason=%s",
+                            user_id,
+                            "explicit_request" if has_explicit_request else "scene_decision",
+                        )
+                        return self._compact_payload(images=images, videos=[], prefer_random=False)
+                except Exception as exc:
+                    logger.exception(
+                        "Failed to generate supplemental image for user_id=%s: %s",
+                        user_id,
+                        exc,
+                    )
+
+            if strong_local_match:
+                if self._should_attach_media(
+                    context=context,
+                    user_id=user_id,
+                    profile=profile,
+                    outcome=outcome,
+                ):
+                    logger.info(
+                        "Using strong local media match for user_id=%s with score=%s",
+                        user_id,
+                        outcome.best_score,
+                    )
+                    return local_payload
+
+                logger.info("Skipped strong local media for user_id=%s after probability gate.", user_id)
+                return {"images": [], "videos": []}
+
+            if has_explicit_request:
+                fallback = await self.get_random_assets(image_count=1, video_count=0)
+                if fallback["images"]:
+                    logger.info("Using random image fallback for explicit media request user_id=%s", user_id)
+                    return fallback
+                logger.info("No image available to satisfy explicit media request user_id=%s", user_id)
+                return {"images": [], "videos": []}
 
             if not self._should_attach_media(
                 context=context,
@@ -118,28 +194,6 @@ class MediaService:
             ):
                 logger.info("Skipped automatic media for user_id=%s after probability gate.", user_id)
                 return {"images": [], "videos": []}
-
-            local_payload = self._outcome_to_payload(outcome)
-            if self._is_good_match(outcome, context) and (local_payload["images"] or local_payload["videos"]):
-                logger.info(
-                    "Using strong local media match for user_id=%s with score=%s",
-                    user_id,
-                    outcome.best_score,
-                )
-                return local_payload
-
-            if await self._should_generate(context, user_id, profile=profile):
-                try:
-                    images = await self.generate_scene_image(prompt=context)
-                    if images:
-                        logger.info("Generated supplemental images for user_id=%s", user_id)
-                        return self._compact_payload(images=images, videos=[], prefer_random=False)
-                except Exception as exc:
-                    logger.exception(
-                        "Failed to generate supplemental image for user_id=%s: %s",
-                        user_id,
-                        exc,
-                    )
 
             if self._should_use_random_fallback(
                 user_id=user_id,
@@ -190,7 +244,7 @@ class MediaService:
         profile: Any | None = None,
     ) -> bool:
         if not self.settings.enable_image_generation:
-            logger.debug("Image generation is disabled in settings.")
+            logger.info("Skipping image generation for user_id=%s because ENABLE_IMAGE_GENERATION is false.", user_id)
             return False
 
         if profile is None:
@@ -205,6 +259,10 @@ class MediaService:
 
         if self._has_special_scene_marker(normalized):
             logger.debug("Image generation enabled by visual scene marker for user_id=%s.", user_id)
+            return True
+
+        if self._has_explicit_media_request(normalized) and len(self._extract_context_terms(context)) >= 2:
+            logger.debug("Image generation enabled by explicit media request for user_id=%s.", user_id)
             return True
 
         context_terms = self._extract_context_terms(context)
@@ -557,6 +615,10 @@ class MediaService:
     @staticmethod
     def _has_special_scene_marker(normalized_context: str) -> bool:
         return any(marker in normalized_context for marker in MediaService.SPECIAL_SCENE_MARKERS)
+
+    @staticmethod
+    def _has_explicit_media_request(normalized_context: str) -> bool:
+        return any(marker in normalized_context for marker in MediaService.EXPLICIT_MEDIA_MARKERS)
 
     def _max_asset_bytes_for_suffixes(self, suffixes: set[str]) -> int | None:
         if suffixes != self.VIDEO_SUFFIXES:

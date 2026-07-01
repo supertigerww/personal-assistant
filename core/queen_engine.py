@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from json import JSONDecodeError
 from typing import Any
 
@@ -69,6 +70,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 
 
 class QueenEngine:
+    MEDIA_PLACEHOLDER_PATTERNS = (
+        r"[（(]\s*(?:图片|图像)?\s*生成中[\s.…。.!！]*[)）]",
+        r"[（(]\s*(?:generating(?:\s+image)?|image\s+generating|loading)[\s.….!！]*[)）]",
+        r"(?:^|\n)\s*(?:正在生成(?:图片|图像)|图片生成中|图像生成中)[\s.…。!！]*(?=$|\n)",
+    )
+
     def __init__(
         self,
         *,
@@ -216,10 +223,10 @@ class QueenEngine:
                 logger.exception("Failed to recover active task for user_id=%s: %s", telegram_user_id, task_exc)
             response_text = self._fallback_reply(profile)
 
-        if not response_text:
-            profile = await self._refresh_profile(profile)
-            logger.warning("Model returned empty text for user_id=%s; using fallback reply.", telegram_user_id)
-            response_text = self._fallback_reply(profile)
+        if response_text:
+            response_text = self._sanitize_response_text(response_text)
+        else:
+            logger.warning("Model returned empty text for user_id=%s before media resolution.", telegram_user_id)
 
         media_context = self._build_media_context(
             user_text=text,
@@ -243,6 +250,11 @@ class QueenEngine:
             generated_urls=generated_urls,
             user_id=telegram_user_id,
         )
+
+        if not response_text and not (local_images or local_videos or generated_urls):
+            profile = await self._refresh_profile(profile)
+            logger.warning("Model returned no usable text or media for user_id=%s; using fallback reply.", telegram_user_id)
+            response_text = self._fallback_reply(profile)
 
         latest_profile = await self.user_service.get_profile(telegram_user_id)
         logger.info(
@@ -540,6 +552,21 @@ class QueenEngine:
             fallback_parts.append(task_title)
 
         return " ".join(fallback_parts).strip()
+
+    @classmethod
+    def _sanitize_response_text(cls, text: str) -> str:
+        cleaned = text
+        for pattern in cls.MEDIA_PLACEHOLDER_PATTERNS:
+            cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
+
+        cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        cleaned = cleaned.strip()
+
+        if cleaned != text.strip():
+            logger.info("Removed placeholder text from model reply.")
+
+        return cleaned
 
     def _finalize_media_outputs(
         self,
