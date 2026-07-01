@@ -110,7 +110,7 @@ class QueenEngine:
             profile.conversation_count,
         )
 
-        # 安全词检测必须最先执行，避免进入任何普通逻辑。
+        # 安全词检测必须最先执行
         if self.safety_service.detect_safeword(text):
             logger.warning("Safeword detected for user_id=%s", telegram_user_id)
             decision = await self.safety_service.handle_safeword(profile)
@@ -128,7 +128,7 @@ class QueenEngine:
             )
             return EngineResult(text=decision.reply, state=decision.state)
 
-        # 用户明确表达不喜欢的内容时，优先记入档案。
+        # 用户明确表达不喜欢的内容时，优先记入档案
         explicit_limits = self.safety_service.extract_limits(text)
         if explicit_limits:
             logger.info("Recording explicit dislikes for user_id=%s: %s", telegram_user_id, explicit_limits)
@@ -141,6 +141,7 @@ class QueenEngine:
             telegram_user_id,
             profile.conversation_count,
         )
+
         skipped_task = await self.task_service.skip_ignored_task_if_needed(
             telegram_user_id=telegram_user_id,
             current_turn=profile.conversation_count,

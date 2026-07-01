@@ -40,26 +40,13 @@ class MediaService:
     IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
     VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm"}
     SPECIAL_SCENE_MARKERS = (
-        "specific",
-        "special",
-        "custom",
-        "detailed",
-        "close-up",
-        "lighting",
-        "outfit",
-        "location",
-        "scene",
-        "angle",
-        "特殊",
-        "具体",
-        "定制",
-        "细节",
-        "特写",
-        "灯光",
-        "服装",
-        "地点",
-        "场景",
-        "角度",
+        "特写", "详细", "具体", "定制", "姿势", "角度",
+        "让我看看", "发给我看", "看着这个", "对比", "幻想", "想象",
+         "寸止", "撸管", "自慰", "羞辱",
+        "母猪", "尿壶", "脚奴", "绿帽", "公开", "验证",
+        "close-up", "detailed", "specific", "pose", "angle", "show me",
+        "imagine", "kneel", "edging", "jerk", "humiliate", "degrade",
+        "cuckold", "public", "verification", "comparison",
     )
 
     def __init__(self, *, settings: Any, grok_client: Any, user_service: Any | None = None) -> None:
@@ -191,11 +178,11 @@ class MediaService:
         if not normalized:
             return False
 
-        keywords = self._extract_keywords(context)
         if self._has_special_scene_marker(normalized):
             return True
 
-        return len(keywords) >= 2 or len(normalized) >= 24
+        keywords = self._extract_keywords(context)
+        return len(keywords) >= 3 or len(normalized) >= 30
 
     def _should_attach_media(
         self,
