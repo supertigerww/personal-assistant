@@ -5,9 +5,14 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    networks:
+      - telegram-shared
     volumes:
       - ${HOST_DATA_PATH:-./data}:/app/data
       - ${HOST_ASSETS_IMAGES_PATH:-./assets/images}:${CONTAINER_ASSETS_IMAGES_PATH:-/app/assets/images}
       - ${HOST_ASSETS_VIDEOS_PATH:-./assets/videos}:${CONTAINER_ASSETS_VIDEOS_PATH:-/app/assets/videos}
+
+networks:
+  telegram-shared:
+    external: true
+    name: ${TELEGRAM_SHARED_NETWORK:-telegram-shared}
