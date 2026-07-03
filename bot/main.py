@@ -4,6 +4,8 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 from dotenv import load_dotenv
 
 from bot.handlers import build_router
@@ -65,7 +67,8 @@ async def main() -> None:
         )
         logger.info("Core services initialized successfully.")
 
-        bot = Bot(token=settings.bot_token)
+        session = AiohttpSession(api=TelegramAPIServer.from_base(settings.bot_endpoint))
+        bot = Bot(token=settings.bot_token, session=session)
         dispatcher = Dispatcher()
         root_router = build_router()
         dispatcher.include_router(root_router)

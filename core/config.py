@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     bot_token: str
+    bot_endpoint: str = "http://telegram-bot-api:8081"
     xai_api_key: str | None = None
     xai_model: str = "grok-4.3"
     xai_base_url: str = "https://api.x.ai/v1"
