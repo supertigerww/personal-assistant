@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import random
@@ -929,18 +930,25 @@ class MediaService:
         matched_categories = matched_categories or []
         ranked: list[AssetCandidate] = []
         for path in self._list_assets(base_path, suffixes):
-            candidate = self._apply_repeat_penalty(
-                self._score_asset(
-                    path,
-                    base_path,
-                    keywords,
-                    matched_categories=matched_categories,
-                    category_index=category_index if suffixes == self.VIDEO_SUFFIXES else None,
-                ),
-                recent_paths,
-            )
-            if candidate.score > 0:
-                ranked.append(candidate)
+            try:
+                candidate = self._apply_repeat_penalty(
+                    self._score_asset(
+                        path,
+                        base_path,
+                        keywords,
+                        matched_categories=matched_categories,
+                        category_index=category_index if suffixes == self.VIDEO_SUFFIXES else None,
+                    ),
+                    recent_paths,
+                )
+                if candidate.score > 0:
+                    ranked.append(candidate)
+            except OSError as exc:
+                if getattr(exc, "errno", None) == 36 or "File name too long" in str(exc).lower():
+                    logger.warning("Skipping asset due to filesystem filename length limit: %s", path)
+                else:
+                    logger.warning("Error scoring asset %s: %s", path, exc)
+                continue
 
         ranked.sort(
             key=lambda item: (
@@ -1027,16 +1035,43 @@ class MediaService:
         suffix = str(getattr(self.settings, "asset_meta_filename", ".meta.json")).strip() or ".meta.json"
         if not suffix.startswith("."):
             suffix = f".{suffix}"
-        return asset_path.with_name(f"{asset_path.stem}{suffix}")
+
+        stem = asset_path.stem
+        full_name = f"{stem}{suffix}"
+
+        # Protect against extremely long filenames (common with downloaded adult content titles)
+        # Linux/Docker typically limits filename to 255 bytes. Be conservative for UTF-8.
+        try:
+            if len(full_name.encode("utf-8")) <= 200:
+                return asset_path.with_name(full_name)
+        except Exception:
+            pass
+
+        # Fallback: truncate + short hash so meta filename is always short and unique
+        h = hashlib.md5(stem.encode("utf-8")).hexdigest()[:8]
+        # Leave headroom for _hash + suffix
+        max_stem_bytes = 180
+        truncated = stem.encode("utf-8")[:max_stem_bytes].decode("utf-8", errors="ignore").rstrip(" _-")
+        safe_name = f"{truncated}_{h}{suffix}"
+        return asset_path.with_name(safe_name)
 
     def _load_asset_meta(self, path: Path) -> dict[str, Any]:
         meta_path = self._meta_sidecar_path(path)
-        if not meta_path.exists():
-            return {}
-
         try:
+            if not meta_path.exists():
+                return {}
             payload = json.loads(meta_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+        except OSError as exc:
+            # errno 36 = ENAMETOOLONG on many systems
+            if getattr(exc, "errno", None) == 36 or "File name too long" in str(exc).lower():
+                logger.warning(
+                    "Skipping meta for asset with extremely long filename (consider renaming the video file): %s",
+                    path,
+                )
+            else:
+                logger.warning("Could not read asset metadata for path=%s: %s", path, exc)
+            return {}
+        except (json.JSONDecodeError, Exception) as exc:
             logger.warning("Could not read asset metadata for path=%s: %s", path, exc)
             return {}
 
@@ -1240,24 +1275,36 @@ class MediaService:
             if path.suffix.lower() not in suffixes:
                 continue
 
-            if max_bytes is not None:
-                try:
-                    size_bytes = path.stat().st_size
-                except OSError as exc:
-                    logger.warning("Could not read media size for path=%s: %s", path, exc)
-                    continue
+            try:
+                if max_bytes is not None:
+                    try:
+                        size_bytes = path.stat().st_size
+                    except OSError as exc:
+                        logger.warning("Could not read media size for path=%s: %s", path, exc)
+                        continue
 
-                if size_bytes > max_bytes:
-                    skipped_oversized += 1
-                    logger.debug(
-                        "Skipping oversized media file path=%s size_mb=%.2f limit_mb=%s",
+                    if size_bytes > max_bytes:
+                        skipped_oversized += 1
+                        logger.debug(
+                            "Skipping oversized media file path=%s size_mb=%.2f limit_mb=%s",
+                            path,
+                            size_bytes / (1024 * 1024),
+                            getattr(self.settings, "max_local_video_size_mb", 45),
+                        )
+                        continue
+
+                assets.append(path)
+            except OSError as exc:
+                # Catch filesystem errors like "File name too long" for individual files
+                if getattr(exc, "errno", None) == 36 or "File name too long" in str(exc).lower():
+                    logger.warning(
+                        "Skipping video with extremely long filename (filesystem limit). "
+                        "Please rename the file to something shorter: %s",
                         path,
-                        size_bytes / (1024 * 1024),
-                        getattr(self.settings, "max_local_video_size_mb", 45),
                     )
-                    continue
-
-            assets.append(path)
+                else:
+                    logger.warning("Could not process media file path=%s: %s", path, exc)
+                continue
 
         if skipped_oversized:
             logger.info("Skipped %s oversized media file(s) under %s", skipped_oversized, base_path)
