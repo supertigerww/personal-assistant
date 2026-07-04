@@ -379,13 +379,20 @@ class GrokClient:
                     error,
                 )
             else:
-                logger.error(
-                    "xAI %s failed with a non-retryable error on attempt %s: %s",
-                    operation,
-                    attempt,
-                    error,
-                    exc_info=error,
-                )
+                if operation == "images.generate" and "content moderation" in str(error).lower():
+                    logger.warning(
+                        "xAI %s rejected by content moderation (expected for explicit scenes): %s",
+                        operation,
+                        error,
+                    )
+                else:
+                    logger.error(
+                        "xAI %s failed with a non-retryable error on attempt %s: %s",
+                        operation,
+                        attempt,
+                        error,
+                        exc_info=error,
+                    )
             raise error
 
         logger.warning(

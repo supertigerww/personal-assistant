@@ -64,7 +64,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "name": "generate_scene_image",
-        "description": "Generate a supplemental image only when local media is clearly insufficient and a concrete visual would help.",
+        "description": (
+            "Generate a supplemental image ONLY when local media is clearly insufficient and a concrete visual would help. "
+            "NEVER use for extremely graphic, scatological, bodily-fluid-heavy or highly degrading scenes — these will be automatically intercepted to avoid content moderation rejection. "
+            "Keep image prompts artistic and visual rather than explicit."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
@@ -686,6 +690,18 @@ class QueenEngine:
                 return {
                     "ok": False,
                     "error": "image_generation_not_allowed_in_current_state",
+                    "state": str(current_profile.state),
+                }, None, []
+            # Auto-intercept heavy explicit content to avoid xAI content moderation rejection
+            if self.media_service._is_too_explicit_for_image_generation(prompt):
+                logger.info(
+                    "Intercepted heavy explicit image generation request for user_id=%s (avoiding moderation block).",
+                    current_profile.telegram_user_id,
+                )
+                return {
+                    "ok": False,
+                    "error": "image_generation_blocked_for_explicit_content",
+                    "message": "此场景过于重口，图片生成已被自动拦截。请优先使用本地素材库中的图片/视频，或用文字详细描述。",
                     "state": str(current_profile.state),
                 }, None, []
             count = max(1, min(int(arguments.get("count", 1)), 4))

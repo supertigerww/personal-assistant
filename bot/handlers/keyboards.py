@@ -7,12 +7,10 @@ from core.reply_utils import should_show_quick_replies
 
 QUICK_DONE = "quick:done"
 QUICK_REFUSE = "quick:refuse"
-QUICK_SLOW = "quick:slow"
 
 QUICK_ACTION_TEXT = {
     QUICK_DONE: "完成了",
     QUICK_REFUSE: "做不到",
-    QUICK_SLOW: "黄色",
 }
 
 
@@ -28,7 +26,6 @@ def build_quick_reply_keyboard(result: EngineResult) -> InlineKeyboardMarkup | N
                 InlineKeyboardButton(text="做不到", callback_data=QUICK_REFUSE),
             ]
         )
-    buttons.append(InlineKeyboardButton(text="慢一点", callback_data=QUICK_SLOW))
     return InlineKeyboardMarkup(inline_keyboard=[buttons])
 
 
@@ -36,7 +33,6 @@ __all__ = [
     "QUICK_ACTION_TEXT",
     "QUICK_DONE",
     "QUICK_REFUSE",
-    "QUICK_SLOW",
     "build_quick_reply_keyboard",
     "should_show_quick_replies",
 ]

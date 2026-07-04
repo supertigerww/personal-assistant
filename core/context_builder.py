@@ -138,7 +138,7 @@ class ContextBuilder:
             f"{task_followup_guidance}"
             "- Use recalled_long_term_memories naturally. Never claim ignorance of facts listed there.\n"
             "- When user expresses dislike ('不喜欢', '讨厌', '不要'), immediately record it using update_user_profile.\n"
-            "- Media usage: Prefer local assets. Use generate_scene_image only when the scene is very specific or local media is insufficient.\n"
+            "- Media usage: Prefer local assets. Use generate_scene_image ONLY when the scene is very specific AND visual reinforcement is truly helpful. Never call it for extremely graphic, scat, fluid-heavy, or ultra-degrading content — such requests are automatically intercepted before hitting xAI moderation.\n"
             f"{video_media_guidance}"
             "- Safety first: Respect all hard limits and safewords strictly.\n"
             "- Tone: Commanding, stern, lewd and humiliating when appropriate.\n"

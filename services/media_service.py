@@ -309,6 +309,14 @@ class MediaService:
             strong_video_match = should_attach_video and self._is_good_video_match(outcome, media_context)
             should_generate = await self._should_generate(media_context, user_id, profile=profile)
 
+            # For heavy/explicit scenes that would be intercepted, explicitly prefer local media first
+            if self._is_too_explicit_for_image_generation(media_context):
+                should_generate = False
+                logger.info(
+                    "Heavy explicit scene for user_id=%s: forcing local media priority (skipping generation).",
+                    user_id,
+                )
+
             logger.info(
                 "Media decision user_id=%s attach_video=%s explicit_image=%s strong_image=%s strong_video=%s should_generate=%s best_score=%s",
                 user_id,
@@ -653,9 +661,40 @@ class MediaService:
                 pass
         return base
 
+    # Tuned-down list of very heavy terms that almost always get rejected by xAI image moderation.
+    # Lowered sensitivity: only block truly problematic visual requests (scat, piss play, cum eating, extreme cuck visuals).
+    # Milder SM elements (poses, outfits, domination) are allowed to try generation.
+    HEAVY_IMAGE_KEYWORDS: tuple[str, ...] = (
+        # Chinese - very specific heavy
+        "吞精", "射精吞", "吞下精液", "精液回收",
+        "撒尿", "尿在", "尿到", "尿壶", "圣水",
+        "粪", "屎", "大便", "马桶", "厕奴", "肛门清理",
+        "绿帽", "戴绿帽", "cuckold", "看别人操",
+        # English heavy
+        "swallow cum", "cum swallow", "piss play", "piss in mouth", "scat", "toilet slave",
+        "cuckold scene", "watching her",
+    )
+
+    def _is_too_explicit_for_image_generation(self, text: str) -> bool:
+        """Return True if the prompt/context is too heavy/explicit for xAI image gen to avoid moderation rejection."""
+        if not text:
+            return False
+        normalized = text.lower()
+        for kw in self.HEAVY_IMAGE_KEYWORDS:
+            if kw.lower() in normalized:
+                return True
+        return False
+
     async def generate_scene_image(self, *, prompt: str, count: int = 1) -> list[str]:
+        if self._is_too_explicit_for_image_generation(prompt):
+            logger.info("Intercepted and skipped image generation for too explicit/heavy content.")
+            return []
+
+        # Sanitize the prompt to remove the heaviest terms before sending to image model
+        safe_prompt = self._sanitize_image_prompt(prompt)
+
         prompt_text = build_scene_image_prompt(
-            scene_prompt=prompt.strip(),
+            scene_prompt=safe_prompt.strip(),
             visual_anchor=self._visual_anchor,
         )
         if not prompt_text:
@@ -668,6 +707,46 @@ class MediaService:
         except Exception as exc:
             logger.exception("Image generation request failed: %s", exc)
             raise
+
+    def _sanitize_image_prompt(self, text: str) -> str:
+        """Remove or soften the most moderation-triggering terms while keeping visual essence."""
+        replacements = {
+            "精液": "液体",
+            "射精": "高潮",
+            "吞精": "吞咽",
+            "尿": "水",
+            "撒尿": "释放",
+            "粪": "污物",
+            "屎": "污物",
+            "大便": "污物",
+            "粪便": "污物",
+            "肛门": "身体",
+            "肛": "身体",
+            "清理器": "服务者",
+            "马桶": "容器",
+            "尿壶": "容器",
+            "母猪": "服从者",
+            "贱狗": "服从者",
+            "绿帽": "关系动态",
+            "cuckold": "dynamic",
+            "吞下": "接受",
+            "体液": "液体",
+            "口交": "亲密",
+            "口舌": "亲密",
+            "厕奴": "服从者",
+            "圣水": "特殊液体",
+            "cum": "fluid",
+            "cumshot": "release",
+            "swallow": "accept",
+            "piss": "fluid",
+            "scat": "waste",
+            "ruined orgasm": "intense moment",
+        }
+        result = text
+        for bad, safe in replacements.items():
+            result = result.replace(bad, safe)
+            result = result.replace(bad.capitalize(), safe)
+        return result
 
     async def _should_generate(
         self,
@@ -688,6 +767,14 @@ class MediaService:
 
         normalized = context.strip().casefold()
         if not normalized:
+            return False
+
+        # Lowered sensitivity: if too heavy, skip generation and use local media instead
+        if self._is_too_explicit_for_image_generation(context):
+            logger.info(
+                "Heavy explicit content detected for user_id=%s, skipping image generation in favor of local assets.",
+                user_id,
+            )
             return False
 
         if self._has_special_scene_marker(normalized):
