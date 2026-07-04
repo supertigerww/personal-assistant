@@ -66,21 +66,32 @@ def generate_safe_name(original_stem: str, ext: str) -> str:
     """
     Create a short, unique, safe filename.
     Strategy:
-      - Keep a meaningful prefix
-      - Add short hash of the FULL original name (for uniqueness)
-      - Clean invalid chars
+      - Keep meaningful prefix (title)
+      - Try to preserve trailing identifiers (e.g. _16_1, V2, part number)
+      - Add short hash of the FULL original name
     """
     original_stem = clean_for_filename(original_stem)
     full_hash = hashlib.md5(original_stem.encode("utf-8")).hexdigest()[:HASH_LEN]
 
-    # Truncate prefix while respecting unicode
-    prefix = original_stem[:KEEP_PREFIX_CHARS]
-    # Make sure the byte length of prefix + hash + ext is safe
-    while get_utf8_len(f"{prefix}_{full_hash}{ext}") > MAX_SAFE_BYTES and len(prefix) > 10:
-        prefix = prefix[:-1]
+    # Try to extract trailing identifier (numbers, version, part info at the end)
+    trailing_match = re.search(r'([_\-]?(?:v?\d+|part|ep|卷|集|第?\d+)[_\-]?\d*)$', original_stem, re.IGNORECASE)
+    trailing = trailing_match.group(1) if trailing_match else ""
 
-    safe_stem = f"{prefix}_{full_hash}".rstrip("_- ")
-    return f"{safe_stem}{ext}"
+    # Remove trailing from stem for prefix calculation
+    base = original_stem[: -len(trailing)] if trailing else original_stem
+
+    # Keep prefix
+    prefix = base[:KEEP_PREFIX_CHARS]
+
+    # Combine: prefix + trailing + hash
+    candidate = f"{prefix}{trailing}_{full_hash}".rstrip("_- ")
+
+    # Shrink if still too long (prefer keeping hash and trailing)
+    while get_utf8_len(f"{candidate}{ext}") > MAX_SAFE_BYTES and len(prefix) > 20:
+        prefix = prefix[:-1]
+        candidate = f"{prefix}{trailing}_{full_hash}".rstrip("_- ")
+
+    return f"{candidate}{ext}"
 
 
 def find_matching_meta(original_video: Path) -> Path | None:
