@@ -38,3 +38,14 @@ def test_primary_category_for_path_uses_top_level_folder(tmp_path):
     )
 
     assert index.primary_category_for_path(videos_path=videos_root, asset_path=clip) == "pov"
+
+    # 测试“套路”文件夹归为 pov，其他归 sm
+    clip2 = videos_root / "套路合集" / "clip2.mp4"
+    clip2.parent.mkdir(parents=True)
+    clip2.write_bytes(b"x")
+    assert index.primary_category_for_path(videos_path=videos_root, asset_path=clip2) == "pov"
+
+    clip3 = videos_root / "我的调教视频" / "clip3.mp4"
+    clip3.parent.mkdir(parents=True)
+    clip3.write_bytes(b"x")
+    assert index.primary_category_for_path(videos_path=videos_root, asset_path=clip3) == "sm"

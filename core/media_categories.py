@@ -95,4 +95,15 @@ class VideoCategoryIndex:
             return None
         if len(relative.parts) < 2:
             return None
-        return relative.parts[0].casefold()
+
+        top_folder = relative.parts[0].casefold()
+
+        # 自定义规则（满足用户需求）：
+        # - 子文件夹名字里出现“套路” → pov
+        # - 保留标准的 pov / sm 文件夹名
+        # - 其他所有子文件夹一律归为 sm
+        if "套路" in top_folder:
+            return "pov"
+        if top_folder in ("pov", "sm"):
+            return top_folder
+        return "sm"
