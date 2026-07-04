@@ -18,11 +18,14 @@ CREATE TABLE IF NOT EXISTS users (
     compliance_score INTEGER NOT NULL DEFAULT 0,
     conversation_count INTEGER NOT NULL DEFAULT 0,
     next_task_turn INTEGER NOT NULL DEFAULT 6,
+    next_photo_task_turn INTEGER NOT NULL DEFAULT 0,
+    next_video_turn INTEGER NOT NULL DEFAULT 18,
     aftercare_until TEXT,
     paused_reason TEXT,
     dislikes TEXT NOT NULL DEFAULT '[]',
     hard_limits TEXT NOT NULL DEFAULT '[]',
     notes TEXT NOT NULL DEFAULT '[]',
+    onboarding_completed INTEGER NOT NULL DEFAULT 0,
     last_model_response_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -61,6 +64,17 @@ CREATE TABLE IF NOT EXISTS conversation_events (
 
 CREATE INDEX IF NOT EXISTS idx_conversation_events_user
 ON conversation_events (telegram_user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS media_deliveries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_user_id INTEGER NOT NULL,
+    asset_path TEXT NOT NULL,
+    delivered_at TEXT NOT NULL,
+    FOREIGN KEY (telegram_user_id) REFERENCES users (telegram_user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_media_deliveries_user_path
+ON media_deliveries (telegram_user_id, asset_path, delivered_at DESC);
 """
 
 
@@ -81,7 +95,27 @@ class Database:
     async def initialize(self) -> None:
         async with self.connect() as connection:
             await connection.executescript(SCHEMA)
+            await self._migrate(connection)
             await connection.commit()
+
+    async def _migrate(self, connection: aiosqlite.Connection) -> None:
+        cursor = await connection.execute("PRAGMA table_info(users)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "next_photo_task_turn" not in columns:
+            await connection.execute(
+                "ALTER TABLE users ADD COLUMN next_photo_task_turn INTEGER NOT NULL DEFAULT 0"
+            )
+        if "onboarding_completed" not in columns:
+            await connection.execute(
+                "ALTER TABLE users ADD COLUMN onboarding_completed INTEGER NOT NULL DEFAULT 0"
+            )
+            await connection.execute(
+                "UPDATE users SET onboarding_completed = 1 WHERE conversation_count > 0"
+            )
+        if "next_video_turn" not in columns:
+            await connection.execute(
+                "ALTER TABLE users ADD COLUMN next_video_turn INTEGER NOT NULL DEFAULT 18"
+            )
 
     async def execute(self, query: str, parameters: Iterable[Any] = ()) -> None:
         async with self.connect() as connection:

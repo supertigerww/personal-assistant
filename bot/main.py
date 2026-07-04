@@ -13,11 +13,15 @@ from core.config import Settings, get_settings
 from core.context_builder import ContextBuilder
 from core.grok_client import GrokClient
 from core.queen_engine import QueenEngine
+from db.chroma_client import create_chroma_client
 from db.database import Database
 from services.media_service import MediaService
 from services.memory_service import MemoryService
+from services.onboarding_service import OnboardingService
 from services.safety_service import SafetyService
 from services.task_service import TaskService
+from services.user_photo_service import UserPhotoService
+from services.processing_gate import ProcessingGate
 from services.user_service import UserService
 
 logger = logging.getLogger(__name__)
@@ -44,17 +48,37 @@ async def main() -> None:
 
         user_service = UserService(database=database, settings=settings)
         task_service = TaskService(database=database, settings=settings, user_service=user_service)
-        memory_service = MemoryService(database=database)
+        user_photo_service = UserPhotoService(settings=settings)
+        chroma_client = create_chroma_client(settings)
+        memory_service = MemoryService(
+            database=database,
+            chroma_client=chroma_client,
+            settings=settings,
+        )
+        if chroma_client.enabled:
+            logger.info("Long-term Chroma memory enabled at %s", settings.chroma_path)
+        else:
+            logger.info("Long-term Chroma memory disabled.")
         grok_client = GrokClient(settings=settings)
 
-        # MediaService accepts an optional user_service so it can make state-aware media decisions.
-        media_service = MediaService(settings=settings, grok_client=grok_client, user_service=user_service)
+        # MediaService accepts optional user_service and database for state-aware media decisions and delivery tracking.
+        media_service = MediaService(
+            settings=settings,
+            grok_client=grok_client,
+            user_service=user_service,
+            database=database,
+        )
         safety_service = SafetyService(
             settings=settings,
             user_service=user_service,
             task_service=task_service,
         )
         context_builder = ContextBuilder(settings=settings)
+        onboarding_service = OnboardingService(
+            user_service=user_service,
+            memory_service=memory_service,
+        )
+        processing_gate = ProcessingGate()
         engine = QueenEngine(
             settings=settings,
             grok_client=grok_client,
@@ -64,6 +88,7 @@ async def main() -> None:
             media_service=media_service,
             safety_service=safety_service,
             context_builder=context_builder,
+            onboarding_service=onboarding_service,
         )
         logger.info("Core services initialized successfully.")
 
@@ -80,6 +105,10 @@ async def main() -> None:
                 "user_service": user_service,
                 "task_service": task_service,
                 "engine": engine,
+                "user_photo_service": user_photo_service,
+                "media_service": media_service,
+                "memory_service": memory_service,
+                "processing_gate": processing_gate,
             }
         )
         logger.info("Dispatcher workflow data initialized.")

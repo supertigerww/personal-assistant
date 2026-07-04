@@ -113,6 +113,123 @@ class GrokClient:
 
         return []
 
+    async def describe_user_photo(self, *, image_path: str) -> str:
+        if not getattr(self.settings, "enable_photo_vision", True):
+            return ""
+
+        path = Path(image_path)
+        if not path.exists():
+            logger.warning("Photo vision skipped because file does not exist: %s", image_path)
+            return ""
+
+        image_bytes = await asyncio.to_thread(path.read_bytes)
+        if not image_bytes:
+            return ""
+
+        mime_type = self._mime_type_for_path(path)
+        encoded = base64.b64encode(image_bytes).decode("ascii")
+        prompt = (
+            "用一两句中文客观描述这张用户提交的照片画面内容，"
+            "用于后续对话上下文。只描述可见内容，不要客套。"
+        )
+
+        for attempt in range(1, self._max_retries + 2):
+            try:
+                response = await self.client.responses.create(
+                    model=self.settings.xai_model,
+                    input=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "input_text", "text": prompt},
+                                {
+                                    "type": "input_image",
+                                    "image_url": f"data:{mime_type};base64,{encoded}",
+                                },
+                            ],
+                        }
+                    ],
+                )
+                description = self.extract_text(response).strip()
+                if description:
+                    return description
+                return ""
+            except Exception as exc:
+                await self._handle_retryable_error(
+                    operation="responses.create.photo_vision",
+                    attempt=attempt,
+                    error=exc,
+                )
+
+        return ""
+
+    async def generate_video_caption(
+        self,
+        *,
+        video_category: str | None,
+        response_text: str,
+        user_text: str,
+        state: str,
+        recent_captions: list[str] | None = None,
+    ) -> str:
+        trimmed_response = self._normalize_text(response_text)[:280]
+        trimmed_user = self._normalize_text(user_text)[:120]
+        category_label = video_category or "unknown"
+        history_block = self._format_recent_captions_for_prompt(recent_captions or [])
+
+        for attempt in range(1, self._max_retries + 2):
+            try:
+                logger.info(
+                    "Calling xAI responses.create for video caption attempt=%s category=%s",
+                    attempt,
+                    category_label,
+                )
+                response = await self.client.responses.create(
+                    model=self.settings.xai_model,
+                    input=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "你是 Luna，强势 SM 女王。为即将单独发送的补充视频写一句极短中文 caption（12-28 字），"
+                                "语气命令式、下流、羞辱，像真人聊天。不要重复用户或你上文里已经出现过的句子，"
+                                "也不要重复近期已用过的视频 caption。每次必须换新说法。"
+                                "只输出这一句，不要引号、不要解释。"
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": (
+                                f"当前状态: {state}\n"
+                                f"视频文件夹类型: {category_label}\n"
+                                f"用户刚说: {trimmed_user or '（无）'}\n"
+                                f"你上文: {trimmed_response or '（无）'}\n"
+                                f"{history_block}\n"
+                                "写视频下方 caption:"
+                            ),
+                        },
+                    ],
+                )
+                caption = self.extract_text(response).strip()
+                if caption:
+                    return caption
+                return ""
+            except Exception as exc:
+                await self._handle_retryable_error(
+                    operation="responses.create.video_caption",
+                    attempt=attempt,
+                    error=exc,
+                )
+
+        return ""
+
+    @staticmethod
+    def _format_recent_captions_for_prompt(recent_captions: list[str]) -> str:
+        cleaned = [item.strip() for item in recent_captions if item and item.strip()]
+        if not cleaned:
+            return "近期用过的视频 caption: 无"
+        lines = "\n".join(f"- {item}" for item in cleaned[:8])
+        return f"近期用过的视频 caption（禁止重复或仅换一两个词）:\n{lines}"
+
     @staticmethod
     def extract_text(response: Any) -> str:
         if getattr(response, "output_text", None):
@@ -310,6 +427,16 @@ class GrokClient:
         if isinstance(item, dict):
             return item.get(field_name)
         return getattr(item, field_name, None)
+
+    @staticmethod
+    def _mime_type_for_path(path: Path) -> str:
+        mapping = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".webp": "image/webp",
+        }
+        return mapping.get(path.suffix.casefold(), "image/jpeg")
 
     @staticmethod
     def _suffix_from_content_type(content_type: str | None) -> str | None:

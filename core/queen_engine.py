@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import re
 from json import JSONDecodeError
 from typing import Any
 
-from core.models import ConversationState, EngineResult, Task, UserProfile
+from core.models import ConversationState, EngineResult, Task, TaskFollowupKind, UserProfile
+from core.reply_utils import should_show_quick_replies
+from services.media_service import MediaBundle
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +31,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "name": "create_task",
-        "description": "Create one concise, non-explicit task when the runtime context says task_window_ready is true.",
+        "description": (
+            "Create ONE formal task ONLY when task_window_ready is true and no open task exists. "
+            "Photo verification tasks additionally require photo_task_window_ready=true. "
+            "Photo tasks must stay rare. Skip if unsure — most replies should not include a task. "
+            "Do not use for casual verbal commands or humiliation that belongs in normal dialogue."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
@@ -66,6 +74,20 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "required": ["prompt"],
         },
     },
+    {
+        "type": "function",
+        "name": "roll_random_twist",
+        "description": "Roll a dice for a random domination twist, punishment style, scene variation, or sudden command to increase unpredictability and replayability. Use sparingly when the scene feels repetitive or to inject fresh energy. Return a short creative description the Queen can adapt into dialogue.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "description": "Optional hint: punishment / humiliation / task_modifier / mood_shift / media_focus / surprise_order. Leave empty for fully random.",
+                }
+            },
+        },
+    },
 ]
 
 
@@ -87,6 +109,7 @@ class QueenEngine:
         media_service: Any,
         safety_service: Any,
         context_builder: Any,
+        onboarding_service: Any | None = None,
     ) -> None:
         self.settings = settings
         self.grok_client = grok_client
@@ -96,6 +119,7 @@ class QueenEngine:
         self.media_service = media_service
         self.safety_service = safety_service
         self.context_builder = context_builder
+        self.onboarding_service = onboarding_service
 
     async def handle_text_message(
         self,
@@ -105,38 +129,106 @@ class QueenEngine:
         display_name: str,
         text: str,
     ) -> EngineResult:
+        return await self._handle_user_message(
+            telegram_user_id=telegram_user_id,
+            username=username,
+            display_name=display_name,
+            user_text=text,
+            message_kind="text",
+            message_metadata={},
+            photo_task_resolution=False,
+        )
+
+    async def handle_photo_message(
+        self,
+        *,
+        telegram_user_id: int,
+        username: str | None,
+        display_name: str,
+        photo_path: str,
+        caption: str | None = None,
+    ) -> EngineResult:
+        photo_description = ""
+        try:
+            photo_description = await self.grok_client.describe_user_photo(image_path=photo_path)
+        except Exception as exc:
+            logger.exception("Photo vision failed for user_id=%s: %s", telegram_user_id, exc)
+
+        user_text = self._build_photo_submission_text(
+            caption=caption,
+            photo_description=photo_description,
+        )
+        return await self._handle_user_message(
+            telegram_user_id=telegram_user_id,
+            username=username,
+            display_name=display_name,
+            user_text=user_text,
+            message_kind="photo",
+            message_metadata={
+                "photo_path": photo_path,
+                "photo_description": photo_description,
+                "caption": caption,
+            },
+            photo_task_resolution=True,
+        )
+
+    async def _handle_user_message(
+        self,
+        *,
+        telegram_user_id: int,
+        username: str | None,
+        display_name: str,
+        user_text: str,
+        message_kind: str,
+        message_metadata: dict[str, Any],
+        photo_task_resolution: bool,
+    ) -> EngineResult:
         profile = await self.user_service.get_or_create(
             telegram_user_id=telegram_user_id,
             username=username,
             display_name=display_name,
         )
+        profile = await self.user_service.sync_runtime_state(profile)
         logger.info(
-            "Handling text message for user_id=%s state=%s turns=%s",
+            "Handling %s message for user_id=%s state=%s turns=%s",
+            message_kind,
             telegram_user_id,
             profile.state,
             profile.conversation_count,
         )
 
-        # 安全词检测必须最先执行
-        if self.safety_service.detect_safeword(text):
-            logger.warning("Safeword detected for user_id=%s", telegram_user_id)
-            decision = await self.safety_service.handle_safeword(profile)
+        if (
+            message_kind == "text"
+            and not profile.onboarding_completed
+            and self.onboarding_service is not None
+        ):
+            profile = await self.onboarding_service.complete_from_user_text(
+                telegram_user_id,
+                user_text,
+            )
+
+        safeword_source = message_metadata.get("caption") or user_text
+        safeword_level = self.safety_service.classify_safeword(str(safeword_source))
+        if safeword_level is not None:
+            logger.warning("Safeword detected for user_id=%s level=%s", telegram_user_id, safeword_level)
+            decision = await self.safety_service.handle_safeword(profile, level=safeword_level)
+            assistant_event = "aftercare" if safeword_level.value == "red" else "safeword_yellow"
             await self._store_message(
                 telegram_user_id,
                 "user",
-                text,
-                metadata={"event": "safeword"},
+                user_text,
+                message_kind=message_kind,
+                metadata={"event": "safeword", "safeword_level": safeword_level.value, **message_metadata},
             )
             await self._store_message(
                 telegram_user_id,
                 "assistant",
                 decision.reply,
-                metadata={"event": "aftercare"},
+                metadata={"event": assistant_event, "safeword_level": safeword_level.value},
             )
             return EngineResult(text=decision.reply, state=decision.state)
 
-        # 用户明确表达不喜欢的内容时，优先记入档案
-        explicit_limits = self.safety_service.extract_limits(text)
+        explicit_limits = self.safety_service.extract_limits(user_text)
         if explicit_limits:
             logger.info("Recording explicit dislikes for user_id=%s: %s", telegram_user_id, explicit_limits)
             await self.user_service.append_dislikes(telegram_user_id, explicit_limits)
@@ -149,17 +241,31 @@ class QueenEngine:
             profile.conversation_count,
         )
 
-        skipped_task = await self.task_service.skip_ignored_task_if_needed(
-            telegram_user_id=telegram_user_id,
-            current_turn=profile.conversation_count,
-            user_text=text,
-        )
-        if skipped_task is not None:
+        if photo_task_resolution:
+            task_followup = await self.task_service.resolve_photo_task_submission(telegram_user_id)
+            caption = str(message_metadata.get("caption") or "").strip()
+            if task_followup.kind == TaskFollowupKind.NONE and caption:
+                task_followup = await self.task_service.resolve_open_task_followup(
+                    telegram_user_id=telegram_user_id,
+                    current_turn=profile.conversation_count,
+                    user_text=caption,
+                )
+        else:
+            task_followup = await self.task_service.resolve_open_task_followup(
+                telegram_user_id=telegram_user_id,
+                current_turn=profile.conversation_count,
+                user_text=user_text,
+            )
+        if task_followup.kind != TaskFollowupKind.NONE:
             logger.info(
-                "Skipped ignored task for user_id=%s task_id=%s at turn=%s",
+                "Resolved task followup for user_id=%s kind=%s task_id=%s at turn=%s",
                 telegram_user_id,
-                skipped_task.id,
+                task_followup.kind,
+                task_followup.task.id if task_followup.task else None,
                 profile.conversation_count,
+            )
+            profile = await self.user_service.sync_runtime_state(
+                await self.user_service.get_profile(telegram_user_id)
             )
 
         active_task = await self.task_service.get_open_task(telegram_user_id)
@@ -167,35 +273,67 @@ class QueenEngine:
             profile=profile,
             active_task=active_task,
         )
+        profile, photo_task_window_ready = await self.task_service.evaluate_photo_task_window(
+            profile=profile,
+            active_task=active_task,
+        )
+        profile, video_window_ready = await self.media_service.evaluate_video_window(profile=profile)
+        media_turn_hints = self.media_service.analyze_turn_hints(
+            user_text=user_text,
+            video_window_ready=video_window_ready,
+        )
+        await self.memory_service.ingest_user_turn(
+            telegram_user_id,
+            user_text,
+            explicit_limits=explicit_limits,
+        )
+
         recent_messages = await self.memory_service.recent_messages(
             telegram_user_id,
             limit=self.settings.recent_message_limit,
         )
+        recalled_memories = await self.memory_service.recall_relevant(
+            telegram_user_id,
+            query=user_text,
+            profile=profile,
+        )
         await self._store_message(
             telegram_user_id,
             "user",
-            text,
+            user_text,
+            message_kind=message_kind,
             metadata={
-                "skipped_task_id": skipped_task.id if skipped_task else None,
+                "task_followup_kind": str(task_followup.kind),
+                "task_followup_id": task_followup.task.id if task_followup.task else None,
                 "explicit_limits": explicit_limits,
+                **message_metadata,
             },
         )
         media_summary = await self.media_service.asset_summary()
+        video_categories_context = self.media_service.video_categories_context(media_summary=media_summary)
         logger.debug(
-            "Context prepared for user_id=%s state=%s task_window_ready=%s active_task=%s media=%s",
+            "Context prepared for user_id=%s state=%s task_window_ready=%s photo_task_window_ready=%s video_window_ready=%s active_task=%s media=%s",
             telegram_user_id,
             profile.state,
             task_window_ready,
+            photo_task_window_ready,
+            video_window_ready,
             active_task.id if active_task else None,
             media_summary,
         )
         messages = self.context_builder.build_messages(
             profile=profile,
-            user_text=text,
+            user_text=user_text,
             recent_messages=recent_messages,
             active_task=active_task,
             task_window_ready=task_window_ready,
+            photo_task_window_ready=photo_task_window_ready,
             local_media_summary=media_summary,
+            task_followup_kind=task_followup.kind,
+            resolved_task=task_followup.task,
+            recalled_memories=recalled_memories,
+            media_turn_hints=media_turn_hints,
+            video_categories_context=video_categories_context,
         )
 
         response_text = ""
@@ -213,6 +351,7 @@ class QueenEngine:
                 response=response,
                 profile=profile,
                 task_window_ready=task_window_ready,
+                photo_task_window_ready=photo_task_window_ready,
             )
         except Exception as exc:
             logger.exception("Model flow failed for user_id=%s: %s", telegram_user_id, exc)
@@ -228,28 +367,52 @@ class QueenEngine:
         else:
             logger.warning("Model returned empty text for user_id=%s before media resolution.", telegram_user_id)
 
-        media_context = self._build_media_context(
-            user_text=text,
-            response_text=response_text,
-            created_task=created_task,
-        )
         if generated_urls:
             logger.debug(
                 "Skipping autonomous media decision for user_id=%s because tool-generated images already exist.",
                 telegram_user_id,
             )
-            media_bundle = {"images": generated_urls[:], "videos": []}
+            resolved_media = MediaBundle(images=generated_urls[:], videos=[])
         else:
-            media_bundle = await self.media_service.get_or_generate_media(
-                context=media_context,
+            resolved_media = await self.media_service.get_or_generate_media(
+                user_text=user_text,
+                response_text=response_text,
                 user_id=telegram_user_id,
+                video_window_ready=video_window_ready,
             )
 
-        local_images, local_videos, generated_urls = self._finalize_media_outputs(
-            media_bundle=media_bundle,
+        local_images, local_videos, generated_urls, video_caption, text_before_video, suggested_foreshadow = self._finalize_media_outputs(
+            media_bundle=resolved_media,
             generated_urls=generated_urls,
             user_id=telegram_user_id,
         )
+
+        if local_images or local_videos:
+            try:
+                await self.media_service.record_deliveries(
+                    telegram_user_id,
+                    [*local_images, *local_videos],
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Failed to record local media deliveries for user_id=%s: %s",
+                    telegram_user_id,
+                    exc,
+                )
+
+        if local_videos:
+            try:
+                video_profile = await self.user_service.get_profile(telegram_user_id)
+                await self.media_service.schedule_next_video_turn(
+                    telegram_user_id,
+                    video_profile.state,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Failed to schedule next video window for user_id=%s: %s",
+                    telegram_user_id,
+                    exc,
+                )
 
         if not response_text and not (local_images or local_videos or generated_urls):
             profile = await self._refresh_profile(profile)
@@ -257,6 +420,11 @@ class QueenEngine:
             response_text = self._fallback_reply(profile)
 
         latest_profile = await self.user_service.get_profile(telegram_user_id)
+        final_open_task = await self.task_service.get_open_task(telegram_user_id)
+        show_quick_replies = should_show_quick_replies(
+            state=latest_profile.state,
+            has_open_task=final_open_task is not None,
+        )
         logger.info(
             "Reply ready for user_id=%s final_state=%s task_id=%s local_images=%s local_videos=%s generated_images=%s",
             telegram_user_id,
@@ -275,6 +443,7 @@ class QueenEngine:
                 "generated_image_urls": generated_urls,
                 "local_images": local_images,
                 "local_videos": local_videos,
+                "video_caption": video_caption,
                 "state": str(latest_profile.state),
             },
         )
@@ -285,6 +454,12 @@ class QueenEngine:
             local_image_paths=local_images,
             local_video_paths=local_videos,
             generated_image_urls=generated_urls,
+            video_caption=video_caption,
+            text_before_video=text_before_video,
+            user_text_for_caption=user_text,
+            show_quick_replies=show_quick_replies,
+            has_open_task=final_open_task is not None,
+            suggested_video_foreshadow=suggested_foreshadow,
         )
 
     async def _resolve_tool_loop(
@@ -293,6 +468,7 @@ class QueenEngine:
         response: Any,
         profile: UserProfile,
         task_window_ready: bool,
+        photo_task_window_ready: bool,
     ) -> tuple[str, Task | None, list[str]]:
         created_task: Task | None = None
         generated_urls: list[str] = []
@@ -321,6 +497,7 @@ class QueenEngine:
                         profile=profile,
                         function_call=function_call,
                         task_window_ready=task_window_ready,
+                        photo_task_window_ready=photo_task_window_ready,
                     )
                 except Exception as exc:
                     logger.exception(
@@ -374,6 +551,7 @@ class QueenEngine:
         profile: UserProfile,
         function_call: dict[str, str],
         task_window_ready: bool,
+        photo_task_window_ready: bool,
     ) -> tuple[dict[str, Any], Task | None, list[str]]:
         current_profile = await self.user_service.get_profile(profile.telegram_user_id)
         name = function_call["name"]
@@ -405,6 +583,12 @@ class QueenEngine:
                 await self.user_service.append_hard_limits(profile.telegram_user_id, hard_limits)
             if notes:
                 await self.user_service.append_notes(profile.telegram_user_id, notes)
+            await self.memory_service.ingest_profile_updates(
+                profile.telegram_user_id,
+                dislikes=dislikes,
+                hard_limits=hard_limits,
+                notes=notes,
+            )
             logger.info(
                 "Profile updated via tool for user_id=%s dislikes=%s hard_limits=%s notes=%s",
                 current_profile.telegram_user_id,
@@ -425,7 +609,10 @@ class QueenEngine:
             blocked_reason = self._get_task_block_reason(
                 current_profile=current_profile,
                 task_window_ready=task_window_ready,
+                photo_task_window_ready=photo_task_window_ready,
                 current_open_task=current_open_task,
+                title=str(arguments.get("title", "")),
+                instructions=str(arguments.get("instructions", "")),
             )
             if blocked_reason is not None:
                 logger.info(
@@ -515,6 +702,22 @@ class QueenEngine:
                 "state": str(current_profile.state),
             }, None, urls
 
+        if name == "roll_random_twist":
+            category = str(arguments.get("category", "")).strip().lower() or None
+            twist = self._roll_random_twist(category=category, profile=current_profile)
+            logger.info(
+                "Rolled random twist for user_id=%s category=%s: %s",
+                current_profile.telegram_user_id,
+                category,
+                twist[:60],
+            )
+            return {
+                "ok": True,
+                "twist": twist,
+                "category": category or "fully_random",
+                "state": str(current_profile.state),
+            }, None, []
+
         logger.warning("Unknown tool requested for user_id=%s tool=%s", current_profile.telegram_user_id, name)
         return {"ok": False, "error": f"unknown_tool:{name}"}, None, []
 
@@ -571,15 +774,18 @@ class QueenEngine:
     def _finalize_media_outputs(
         self,
         *,
-        media_bundle: dict[str, list[str]],
+        media_bundle: MediaBundle,
         generated_urls: list[str],
         user_id: int,
-    ) -> tuple[list[str], list[str], list[str]]:
-        local_images = [item for item in media_bundle.get("images", []) if not self._is_remote_asset(item)]
-        local_videos = media_bundle.get("videos", [])[:]
+    ) -> tuple[list[str], list[str], list[str], str | None, bool, str | None]:
+        local_images = [item for item in media_bundle.images if not self._is_remote_asset(item)]
+        local_videos = media_bundle.videos[:]
         merged_generated_urls = self._dedupe_strings(
-            generated_urls + [item for item in media_bundle.get("images", []) if self._is_remote_asset(item)]
+            generated_urls + [item for item in media_bundle.images if self._is_remote_asset(item)]
         )
+        video_caption = media_bundle.video_caption
+        text_before_video = media_bundle.text_before_video
+        suggested = getattr(media_bundle, "suggested_foreshadow", None)
 
         if merged_generated_urls and (local_images or local_videos):
             logger.info(
@@ -589,13 +795,24 @@ class QueenEngine:
                 len(local_videos),
                 len(merged_generated_urls),
             )
-            return [], [], merged_generated_urls
+            return [], [], merged_generated_urls, None, False, None
 
-        return local_images, local_videos, merged_generated_urls
+        return local_images, local_videos, merged_generated_urls, video_caption, text_before_video, suggested
 
     @staticmethod
     def _should_generate_image(profile: UserProfile) -> bool:
         return profile.state not in {ConversationState.AFTERCARE, ConversationState.PAUSED}
+
+    @staticmethod
+    def _build_photo_submission_text(*, caption: str | None, photo_description: str) -> str:
+        lines = ["[用户发送了一张照片]"]
+        if photo_description.strip():
+            lines.append(f"照片内容：{photo_description.strip()}")
+        else:
+            lines.append("照片内容：尚未生成视觉描述。")
+        if caption and caption.strip():
+            lines.append(f"用户配文：{caption.strip()}")
+        return "\n".join(lines)
 
     async def _store_message(
         self,
@@ -603,12 +820,15 @@ class QueenEngine:
         role: str,
         content: str,
         metadata: dict[str, Any] | None = None,
+        *,
+        message_kind: str = "text",
     ) -> None:
         try:
             await self.memory_service.store_message(
                 telegram_user_id,
                 role,
                 content,
+                message_kind=message_kind,
                 metadata=metadata,
             )
         except Exception as exc:
@@ -631,7 +851,10 @@ class QueenEngine:
         *,
         current_profile: UserProfile,
         task_window_ready: bool,
+        photo_task_window_ready: bool,
         current_open_task: Task | None,
+        title: str = "",
+        instructions: str = "",
     ) -> str | None:
         if current_profile.state in {ConversationState.AFTERCARE, ConversationState.PAUSED}:
             return f"task_blocked_by_state:{current_profile.state}"
@@ -639,6 +862,9 @@ class QueenEngine:
             return "existing_open_task"
         if not task_window_ready or not self.task_service.can_issue_now(current_profile):
             return "task_window_not_available"
+        if self.task_service.is_photo_verification_task(title, instructions):
+            if not photo_task_window_ready or not self.task_service.can_issue_photo_now(current_profile):
+                return "photo_task_window_not_available"
         return None
 
     @staticmethod
@@ -648,3 +874,63 @@ class QueenEngine:
             if value not in deduped:
                 deduped.append(value)
         return deduped
+
+    def _roll_random_twist(self, *, category: str | None = None, profile: UserProfile | None = None) -> str:
+        """Return a fresh random domination twist to increase variety."""
+        compliance = getattr(profile, "compliance_score", 5) if profile else 5
+        state = str(getattr(profile, "state", "normal")).lower()
+
+        base_twists = [
+            "突然要求用户立刻摆一个特别羞耻的姿势并保持30秒，同时描述感受。",
+            "把上一次的羞辱回忆拉出来升级：用更残忍的语言重述并要求用户复述。",
+            "临时决定改变语气：这一段特别冷淡、轻蔑，像在处理一件无聊的玩具。",
+            "给一个即时小任务：必须在下一条消息前完成一个简单动作（例如换女装元素、写一句检讨）。",
+            "随机聚焦一个新羞辱点：突然强调脚、丝袜、精液、对比正常男人等其中之一深入玩弄。",
+            "制造小惊喜：告诉用户‘今天心情特别坏’，接下来惩罚会更重。",
+            "让用户选择但其实没得选：给你两个羞辱选项，两个都很下贱。",
+            "结合 compliance：既然你这么听话/这么不听话，女王决定……（根据分数调整奖励或加码）。",
+        ]
+
+        if category == "punishment":
+            pool = [
+                "随机惩罚：必须用最下贱的称呼自报家门三遍，然后描述自己最丢脸的一刻。",
+                "突然加码：这个回合不允许任何快感，只能纯粹的羞辱和服从姿势。",
+                "写悔过书：立刻写一段200字的检讨，主题是‘我为什么是女王的专属尿壶’。",
+            ]
+        elif category == "mood_shift":
+            pool = [
+                "语气突然从戏谑变成极度残忍，像变了一个人。",
+                "今天特别温柔但更危险：用‘宝贝’但每句话都带刀。",
+                "决定忽略用户一会儿，让用户自己求关注。",
+            ]
+        elif category == "media_focus":
+            pool = [
+                "决定给一段‘特别的’视频作为今天的重头戏，先用最详细的语言铺垫期待。",
+                "图片强化：想象生成一张用户必须模仿的姿势照。",
+                "视频后必须立刻复述视频里的动作并表演给女王看。",
+            ]
+        elif category == "surprise_order":
+            pool = [
+                "突然命令：现在立刻去准备某个道具（即使虚拟也必须描述过程）。",
+                "即时命令：把手放好，不许动，直到女王允许。",
+                "随机小羞辱：必须发一段语音自述（或文字模拟）‘我是女王的贱狗’。",
+            ]
+        else:
+            pool = base_twists
+
+        # Bias slightly by compliance
+        if compliance >= 12:
+            pool.append("因为你最近很乖，女王破例给你一个‘奖励式羞辱’——更精致但一样下贱。")
+        elif compliance <= 4:
+            pool.append("因为你太差劲了，女王决定用最简单粗暴的方式收拾你。")
+
+        if state == "intense":
+            pool.extend([
+                "强度突然拉满：这一段全部用最下流、最具体的语言推进。",
+                "决定不给任何喘息：连续几个命令压下来。",
+            ])
+
+        twist = random.choice(pool)
+        # Add a bit of flavor
+        flavors = ["", "而且要立刻执行。", "女王现在就想看你反应。", "别让我重复。"]
+        return twist + " " + random.choice(flavors) if random.random() > 0.4 else twist
