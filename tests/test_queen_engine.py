@@ -97,6 +97,25 @@ def test_sanitize_response_text_can_return_empty_for_placeholder_only():
     assert cleaned == ""
 
 
+def test_sanitize_removes_queen_image_generation_claims():
+    """Ensure no '以为生成但没图' language leaks, especially around Queen's visual.
+    Offending sentences should be entirely removed.
+    """
+    examples = [
+        ("女王的形象我已经为你生成了一张，跪好看着。", ""),
+        ("我为你生成女王的形象，想象自己就是里面那个。", ""),
+        ("现在我生成了女王的形象给你看。正常回复。", "正常回复。"),
+        ("想象生成一张女王的形象。继续羞辱。", "继续羞辱。"),
+    ]
+    for ex, expected in examples:
+        cleaned = QueenEngine._sanitize_response_text(ex)
+        # loose check: no full generation claim sentences remain
+        assert "为你生成" not in cleaned.lower()
+        assert "生成了女王的形象" not in cleaned.lower()
+        if expected:
+            assert expected in cleaned
+
+
 def test_build_photo_submission_text_includes_description_and_caption():
     text = QueenEngine._build_photo_submission_text(
         caption="完成拍照",
@@ -111,4 +130,4 @@ def test_build_photo_submission_text_includes_description_and_caption():
 def test_build_photo_submission_text_without_description():
     text = QueenEngine._build_photo_submission_text(caption=None, photo_description="")
 
-    assert "尚未生成视觉描述" in text
+    assert "系统未提供额外描述" in text or "尚未生成视觉描述" in text  # support both for backward

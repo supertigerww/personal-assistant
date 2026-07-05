@@ -67,7 +67,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "description": (
             "Generate a supplemental image ONLY when local media is clearly insufficient and a concrete visual would help. "
             "NEVER use for extremely graphic, scatological, bodily-fluid-heavy or highly degrading scenes — these will be automatically intercepted to avoid content moderation rejection. "
-            "Keep image prompts artistic and visual rather than explicit."
+            "Keep image prompts artistic and visual rather than explicit. "
+            "IMPORTANT: Do NOT mention in your response text that you are generating or have generated any image (especially not '女王的形象' or '我为你生成'). The system will attach the image if successful; your text should only guide the user to look if it is attached."
         ),
         "parameters": {
             "type": "object",
@@ -150,6 +151,18 @@ class QueenEngine:
         r"[（(]\s*(?:图片|图像)?\s*生成中[\s.…。.!！]*[)）]",
         r"[（(]\s*(?:generating(?:\s+image)?|image\s+generating|loading)[\s.….!！]*[)）]",
         r"(?:^|\n)\s*(?:正在生成(?:图片|图像)|图片生成中|图像生成中)[\s.…。!！]*(?=$|\n)",
+    )
+
+    # Additional patterns to remove claims that an image (especially Queen's visual) was generated
+    # even if no actual image was attached. This prevents "as if generated but no image" text.
+    GENERATION_CLAIM_PATTERNS = (
+        r"我(已经|已|现在|为你|正要|打算)?\s*生成了?\s*(一?张|女王的|的|一张|一幅)?\s*(形象|图片|图像|视觉|照片|画面|女王形象)[^。！？\n]*[。！？\n]?",
+        r"(为你|我)(已经)?\s*生成(了|女王的形象|一张.*形象|视觉|女王形象)[^。！？\n]*[。！？\n]?",
+        r"生成(女王的形象|女王形象|一张.*形象)[^。！？\n]*[。！？\n]?",
+        r"女王的形象[^。！？\n]*?(生成|已生成|想象生成|我生成)[^。！？\n]*[。！？\n]?",
+        r"想象[^。！？\n]*?(生成|生成一张|生成女王|生成形象)[^。！？\n]*[。！？\n]?",
+        r"我为你(生成|生成了|生成了一张)[^。！？\n]*[。！？\n]?",
+        r"(?:^|\n)\s*看着这张(生成|我生成|女王生成)的[^。！？\n]*[。！？\n]?",
     )
 
     def __init__(
@@ -475,6 +488,13 @@ class QueenEngine:
             profile = await self._refresh_profile(profile)
             logger.warning("Model returned no usable text or media for user_id=%s; using fallback reply.", telegram_user_id)
             response_text = self._fallback_reply(profile)
+
+        # Extra safety pass: if no actual image (generated or local) was produced/delivered this turn,
+        # aggressively strip any remaining claims about generating Queen's image or any image.
+        # This prevents text like "我为你生成女王的形象..." when nothing is attached.
+        has_any_media = bool(local_images or local_videos or generated_urls)
+        if not has_any_media and response_text:
+            response_text = self._sanitize_response_text(response_text)
 
         latest_profile = await self.user_service.get_profile(telegram_user_id)
         final_open_task = await self.task_service.get_open_task(telegram_user_id)
@@ -931,17 +951,57 @@ class QueenEngine:
     @classmethod
     def _sanitize_response_text(cls, text: str) -> str:
         cleaned = text
+
+        # First remove exact placeholder patterns
         for pattern in cls.MEDIA_PLACEHOLDER_PATTERNS:
             cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
+
+        # Then aggressively remove any sentences that claim image/Queen visual generation.
+        # This is more reliable for natural language from the model.
+        cleaned = cls._remove_generation_claim_sentences(cleaned)
 
         cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
         cleaned = cleaned.strip()
 
         if cleaned != text.strip():
-            logger.info("Removed placeholder text from model reply.")
+            logger.info("Removed placeholder/generation claim text from model reply.")
 
         return cleaned
+
+    @classmethod
+    def _remove_generation_claim_sentences(cls, text: str) -> str:
+        """Remove entire sentences containing claims of generating images or the Queen's image/visual."""
+        if not text:
+            return text
+        # Split on Chinese/English sentence terminators while keeping delimiters roughly
+        sentences = re.split(r'([。！？.!?]+)', text)
+        kept = []
+        claim_keywords = (
+            "生成", "生成了", "为你生成", "我生成", "想象生成",
+            "女王的形象", "女王形象", "生成形象", "生成图片", "生成图像",
+            "生成视觉", "我为你生成", "已经生成"
+        )
+        i = 0
+        while i < len(sentences):
+            sent = sentences[i]
+            delim = sentences[i+1] if i+1 < len(sentences) else ""
+            combined = (sent + delim).strip()
+            lower = combined.lower()
+            if any(kw in lower for kw in claim_keywords):
+                # skip this sentence entirely
+                i += 2
+                continue
+            if sent.strip():
+                kept.append(sent)
+            if delim:
+                kept.append(delim)
+            i += 2
+        result = "".join(kept)
+        # Final tidy
+        result = re.sub(r"^[。！？\s]+", "", result)
+        result = re.sub(r"\s{2,}", " ", result).strip()
+        return result
 
     def _finalize_media_outputs(
         self,
@@ -971,8 +1031,9 @@ class QueenEngine:
 
         return local_images[:1], local_videos[:1], merged_generated_urls[:1], video_caption, text_before_video, suggested
 
-    @staticmethod
-    def _should_generate_image(profile: UserProfile) -> bool:
+    def _should_generate_image(self, profile: UserProfile) -> bool:
+        if not getattr(self.settings, "enable_image_generation", False):
+            return False
         return profile.state not in {ConversationState.AFTERCARE, ConversationState.PAUSED}
 
     @staticmethod
@@ -981,7 +1042,7 @@ class QueenEngine:
         if photo_description.strip():
             lines.append(f"照片内容：{photo_description.strip()}")
         else:
-            lines.append("照片内容：尚未生成视觉描述。")
+            lines.append("照片内容：（系统未提供额外描述）")
         if caption and caption.strip():
             lines.append(f"用户配文：{caption.strip()}")
         return "\n".join(lines)
