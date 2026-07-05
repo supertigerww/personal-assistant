@@ -122,9 +122,19 @@ class XAssetsService:
 
         results = []
         for p in list(posts_dict.values())[:limit]:
-            if p.get("media_paths"):
-                p["media_paths"] = p["media_paths"][:1]
-            results.append(p)
+            # Filter to only existing files to prevent FileNotFound when sending
+            valid_paths = []
+            for mp in p.get("media_paths", []):
+                try:
+                    if mp and Path(mp).exists():
+                        valid_paths.append(mp)
+                    else:
+                        logger.warning("X asset file missing on disk, skipping: %s", mp)
+                except Exception:
+                    logger.warning("X asset path invalid, skipping: %s", mp)
+            if valid_paths:
+                p["media_paths"] = valid_paths[:1]
+                results.append(p)
         logger.info("Fetched %s X humiliation posts for keywords=%s via FTS", len(results), keywords)
         return results
 
@@ -171,9 +181,18 @@ class XAssetsService:
 
         results = []
         for p in list(posts_dict.values())[:limit]:
-            if p.get("media_paths"):
-                p["media_paths"] = p["media_paths"][:1]
-            results.append(p)
+            valid_paths = []
+            for mp in p.get("media_paths", []):
+                try:
+                    if mp and Path(mp).exists():
+                        valid_paths.append(mp)
+                    else:
+                        logger.warning("X asset file missing on disk (random), skipping: %s", mp)
+                except Exception:
+                    pass
+            if valid_paths:
+                p["media_paths"] = valid_paths[:1]
+                results.append(p)
         return results
 
     def _build_full_media_path(self, local_path: str) -> str:
@@ -183,14 +202,17 @@ class XAssetsService:
         if not local_path:
             return ""
         cleaned = local_path.lstrip("/")
-        # Strip bad prefixes that the download script apparently recorded (e.g. 'app/images/...')
-        # This fixes paths like /app/assets/x_assets/app/images/... becoming correct /app/assets/x_assets/...
+        # Strip bad prefixes that the download script apparently recorded.
         bad_prefixes = [
             "app/images/", "images/", "app/assets/images/", "assets/images/",
-            "app/", "docker/assets/images/"
+            "app/", "docker/assets/images/", "/app/assets/x_assets/"
         ]
         for bad in bad_prefixes:
             if cleaned.startswith(bad):
                 cleaned = cleaned[len(bad):]
                 break
-        return str(self.assets_root / cleaned)
+        full_path = str(self.assets_root / cleaned)
+        # Log for debugging path issues
+        if local_path != cleaned:
+            logger.debug("Built X media path: original=%s -> %s", local_path, full_path)
+        return full_path

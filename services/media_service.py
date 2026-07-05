@@ -230,11 +230,15 @@ class MediaService:
                         x_posts = await self.x_assets_service.search_humiliation_posts(keywords=x_kw, limit=1)
                         for post in x_posts:
                             for m in post.get("media_paths", []):
-                                p = Path(m)
-                                if p.suffix.lower() in self.IMAGE_SUFFIXES:
-                                    return {"images": [m], "videos": []}
-                                else:
-                                    return {"images": [], "videos": [m]}
+                                try:
+                                    p = Path(m)
+                                    if p.exists():
+                                        if p.suffix.lower() in self.IMAGE_SUFFIXES:
+                                            return {"images": [m], "videos": []}
+                                        else:
+                                            return {"images": [], "videos": [m]}
+                                except Exception:
+                                    continue
                 except Exception as exc:
                     logger.exception("X keyword pick failed: %s", exc)
 
@@ -496,14 +500,16 @@ class MediaService:
             images = []
             videos = []
             for post in posts:
-                for mpath in post.get("media_paths", [])[:1]:  # at most one media per post
-                    p = Path(mpath)
-                    if p.suffix.lower() in self.IMAGE_SUFFIXES:
-                        images.append(mpath)
-                    else:
-                        videos.append(mpath)
-                    break  # only first media overall
-            # ensure overall at most 1 media
+                for mpath in post.get("media_paths", [])[:1]:
+                    try:
+                        p = Path(mpath)
+                        if p.exists() and p.suffix.lower() in self.IMAGE_SUFFIXES:
+                            images.append(mpath)
+                        elif p.exists():
+                            videos.append(mpath)
+                    except Exception:
+                        continue
+                    break
             if videos:
                 return {"images": [], "videos": videos[:1]}
             return {"images": images[:1], "videos": []}
@@ -981,7 +987,7 @@ class MediaService:
 
             if re.fullmatch(r"[\u4e00-\u9fff]+", token):
                 for candidate in MediaService._expand_chinese_token(token):
-                    if candidate not in keywords:
+                    if len(candidate) >= 2 and candidate not in keywords:
                         keywords.append(candidate)
                 continue
 
@@ -1015,16 +1021,23 @@ class MediaService:
         if len(token) <= 2:
             return [token]
 
+        # Prefer the full token + a couple of meaningful longer pieces.
+        # Avoid flooding FTS with tiny fragments like '以看看女' which lead to bad matches and missing files.
         expanded: list[str] = [token]
         max_window = min(4, len(token))
-        for window in range(max_window, 1, -1):
+        # Only add a few high-value longer substrings
+        for window in (max_window, max_window - 1):
+            if window < 3:
+                continue
             for start in range(0, len(token) - window + 1):
                 piece = token[start : start + window]
-                if piece not in expanded:
+                if len(piece) >= 3 and piece not in expanded:
                     expanded.append(piece)
-                if len(expanded) >= 10:
-                    return expanded
-        return expanded
+                if len(expanded) >= 5:
+                    break
+            if len(expanded) >= 5:
+                break
+        return expanded[:6]  # keep it small and useful
 
     async def _recent_paths_for_user(self, user_id: int | None) -> set[str]:
         if user_id is None:

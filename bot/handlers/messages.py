@@ -297,6 +297,21 @@ async def _send_single_media(
     reply_markup=None,
 ) -> bool:
     kind, source, is_local = item
+
+    if is_local:
+        try:
+            src_path = Path(source)
+            if not src_path.exists():
+                logger.warning(
+                    "Local media file does not exist, skipping send: %s (chat=%s)",
+                    source,
+                    message.chat.id,
+                )
+                return False
+        except Exception:
+            logger.warning("Invalid local media path, skipping: %s", source)
+            return False
+
     payload = FSInputFile(source) if is_local else source
 
     try:

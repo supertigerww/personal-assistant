@@ -36,7 +36,16 @@ class ChromaMemoryClient:
 
         if self.enabled:
             self.persist_path.mkdir(parents=True, exist_ok=True)
-            self._client = chromadb.PersistentClient(path=self.persist_path.as_posix())
+            try:
+                # Disable PostHog telemetry which often causes "capture() takes 1 positional..." errors
+                chroma_settings = chromadb.Settings(anonymized_telemetry=False)
+                self._client = chromadb.PersistentClient(
+                    path=self.persist_path.as_posix(),
+                    settings=chroma_settings,
+                )
+            except Exception:
+                # Fallback without settings if older chromadb
+                self._client = chromadb.PersistentClient(path=self.persist_path.as_posix())
             self._collection = self._client.get_or_create_collection(
                 name=self.collection_name,
                 metadata={"hnsw:space": "cosine"},
