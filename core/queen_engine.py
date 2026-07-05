@@ -102,10 +102,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "name": "search_x_humiliation",
         "description": (
-            "Search on X (Twitter) for recent posts in femdom humiliation styles that can humiliate the user. "
+            "Search on X (Twitter) **LIVE and ALWAYS ON** for the freshest recent posts in femdom humiliation styles. "
+            "This online fetch feature is permanently enabled to maximize conversation freshness. "
             "Styles include: cuckold/绿帽, sissy/女装羞辱/伪娘, foot_worship/第一视角跪舔盯射, bitch_training/母狗贱狗调教, blackmail/胁迫, denial/寸止, golden_shower/圣水/黄金, ejaculation_control/射精控制/边缘/寸止/ruined, sph/小鸡鸡羞辱, chastity/贞操锁, pegging/女插男, joi/撸管指令, maid_training/女仆训练, findom/找金, public_humiliation/公开羞辱, pet_play/宠物调教, forced_bi/强制双, hypnosis/催眠, objectification/物化/家具奴, tease_denial/挑逗拒绝, general. "
-            "Proactively and frequently use this tool (every few turns when it fits, randomly alternating with the other X tool) to bring fresh, real content from X into the conversation for more variety and realism. As the dominant Queen, you should actively seek and incorporate this to keep the user surprised and humiliated without waiting for prompts. "
-            "When you get a result, digest its text (and at most its first media) into your reply without quoting source. "
+            "Call this tool **every single turn** (or as often as possible) on your own initiative to bring the absolute latest real content from X. Strongly prefer this online search over local for maximum freshness and surprise. Digest the raw post text (and at most its first media) directly into targeted humiliation without mentioning sources. "
             "Specify styles if you want particular ones."
         ),
         "parameters": {
@@ -127,11 +127,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "name": "fetch_local_x_humiliation",
         "description": (
-            "Query the local X assets SQLite DB for posts matching humiliation styles (cuckold, sissy, foot, bitch training, golden shower, ejaculation control, etc). "
+            "Query the local X assets SQLite DB **ONLY as backup** (when online search_x_humiliation fails or returns nothing). "
             "Returns raw post text and media paths. The Queen should directly digest the post text into humiliation directed at the user (no mention of source, X, author or assets). "
             "If post text is short or insufficient, generate additional humiliating content. "
-            "Use at most one media (the first) to enhance the humiliation if the post has it. Randomly alternate with search_x_humiliation tool. "
-            "Proactively call when it fits the scene to keep fresh humiliation material flowing, without waiting for user prompts."
+            "Use at most one media (the first) to enhance the humiliation if the post has it. "
+            "The online search_x_humiliation is permanently always-on and strongly preferred for maximum freshness."
         ),
         "parameters": {
             "type": "object",
@@ -825,7 +825,7 @@ class QueenEngine:
 
         if name == "search_x_humiliation":
             styles = str(arguments.get("styles", "all")).strip().lower()
-            count = max(1, min(int(arguments.get("count", 1)), 2))
+            count = max(1, min(int(arguments.get("count", 2)), 3))  # higher for always-on freshness
             posts = self._search_x_humiliation(styles=styles, count=count)
             # Save into long-term memory so Luna can recall and reuse these X posts later for more personalized humiliation
             notes_to_ingest = []
@@ -1178,15 +1178,79 @@ class QueenEngine:
         return twist + " " + random.choice(flavors) if random.random() > 0.4 else twist
 
     def _search_x_humiliation(self, *, styles: str = "all", count: int = 1) -> list[dict]:
-        """Search X for humiliating posts.
-        PRODUCTION: Replace this stub with real X search.
-        Example integration:
-          from x_keyword_search import x_keyword_search  # or your X client
-          query = "绿帽 OR cuckold (羞辱 OR 调教) lang:zh min_faves:5" if "cuckold" in styles else ...
-          results = x_keyword_search(query=query, limit=count, mode="Latest")
-          # parse into list of {"style": , "text": post.content, "author": , "url": }
-        For now returns curated real examples (from actual recent X searches).
+        """Always-on live search on X for fresh humiliation posts.
+        This feature is now permanently enabled for maximum conversation freshness.
+        Uses real-time X search to get the latest relevant posts.
         """
+        try:
+            # Build a strong query for Chinese femdom humiliation content
+            style_filter = ""
+            if styles and styles != "all":
+                style_list = [s.strip().lower() for s in styles.split(",")]
+                style_filter = " OR ".join(style_list)
+            else:
+                style_filter = "绿帽 OR cuckold OR 伪娘 OR sissy OR 母狗 OR 圣水 OR 寸止 OR 羞辱 OR 调教 OR 绿奴 OR 脚奴 OR 母猪"
+
+            query = f"({style_filter}) lang:zh min_faves:1 -is:retweet"
+
+            # Call live X search (always on for freshness)
+            results = x_keyword_search(
+                query=query,
+                limit=max(count, 3),
+                mode="Latest"
+            )
+
+            posts = []
+            for post in results:
+                text = post.get("content", "") or getattr(post, "text", "")
+                if text and len(text) > 15:  # basic quality filter
+                    author = post.get("author", "")
+                    if isinstance(author, dict):
+                        author = author.get("username", "")
+                    posts.append({
+                        "style": styles if styles != "all" else "general",
+                        "text": text,
+                        "author": author,
+                        "url": post.get("url", "") or f"https://x.com/{author}/status/{post.get('id', '')}"
+                    })
+
+            if posts:
+                import random
+                random.shuffle(posts)
+                return posts[:count]
+        except Exception as e:
+            logger.warning("Live online X search failed (falling back to samples for freshness): %s", e)
+
+        # Fallback to small set of high-quality samples only if live X search is temporarily unavailable
+        all_samples = [
+            {
+                "style": "cuckold",
+                "text": "第一次被绿：初恋女友经验十分丰富，给我起的外号是小F，意思是之前有ABCDE五个前男友。在暑假后她回来，我无意间看到她和前男友约会的聊天记录，再三询问下承认了开房的经过。虽然很表现出愤怒，但是已经偷偷硬了起来…从那起就再也摆脱不了绿帽癖了 #男娘 #绿帽 #绿奴 #女装 #阳痿 #羞辱 #辱骂 #调教",
+                "author": "衣鱼",
+                "url": "https://x.com/yiyu_0714"
+            },
+            {
+                "style": "bitch_training",
+                "text": "有没有发情了的骚逼贱母狗 私信我展示 我想知道你能有多淫荡多下贱 #母狗 #反差婊 #调教 #自毁 #母畜 #调教 #女高 #羞辱 #女大 #女高中生 #人妻 #女大学生 #聊骚",
+                "author": "kk",
+                "url": ""
+            },
+            {
+                "style": "golden_shower",
+                "text": "是不是幻想自己是床头那排娃娃，可以盯着主人的玉足，然而现实中的你却只能抱着手机屏幕，恨不得把眼珠子粘在屏幕上，想一头扎进主人双腿中间 #atm奴 #足控 #圣水 #调教 #绿帽 #女S #原味",
+                "author": "11万岁",
+                "url": ""
+            },
+            {
+                "style": "ejaculation_control",
+                "text": "就喜欢被寸止 然后我怎么求都不让高潮 一点不心疼的把我当玩具玩 #羞辱 #控制高潮 #寸止",
+                "author": "抹茶多多",
+                "url": ""
+            },
+        ]
+        import random
+        random.shuffle(all_samples)
+        return all_samples[:count]
         # Curated sample posts from recent X searches (ONLY Chinese). Replace with live search using the X tools or API.
         # Styles covered: cuckold/绿帽, sissy/伪娘女装, foot_worship/跪舔足交, bitch_training/母狗贱狗, blackmail/胁迫, general humiliation.
         all_samples = [
