@@ -237,6 +237,10 @@ class MediaService:
                                             return {"images": [m], "videos": []}
                                         else:
                                             return {"images": [], "videos": [m]}
+                                    else:
+                                        folder = p.parts[0] if p.parts else ""
+                                        if folder:
+                                            await self.cleanup_x_folder(folder)
                                 except Exception:
                                     continue
                 except Exception as exc:
@@ -312,6 +316,13 @@ class MediaService:
         try:
             profile = await self._safe_get_profile(user_id)
             media_context = self._compose_media_context(user_text=user_text, response_text=response_text)
+
+            # For image generation decisions (heavy check, should_generate), use primarily
+            # the *current user request* text. This ignores accumulated roleplay context
+            # (e.g. previous heavy fetish keywords from X posts or replies) so that
+            # innocent "generate image" requests aren't blocked.
+            image_decision_context = (user_text or "").strip() or media_context
+
             recent_paths = await self._recent_paths_for_user(user_id)
             outcome = await self._search_assets(media_context, user_id=user_id)
 
@@ -345,11 +356,13 @@ class MediaService:
             )
             strong_image_match = self._is_good_match(outcome, media_context) and image_payload["images"]
             strong_video_match = should_attach_video and self._is_good_video_match(outcome, media_context)
-            should_generate = await self._should_generate(media_context, user_id, profile=profile)
+            should_generate = await self._should_generate(image_decision_context, user_id, profile=profile)
 
-            is_heavy = self._is_too_explicit_for_image_generation(media_context)
+            is_heavy = self._is_too_explicit_for_image_generation(image_decision_context)
+            is_queen_visual = self._is_queen_visual_request(image_decision_context) or self._is_queen_visual_request(user_text)
             # For heavy/explicit scenes that would be intercepted, explicitly prefer local media first
-            if is_heavy:
+            # Exception: if user specifically wants the Queen's image/appearance, allow generation with clean prompt
+            if is_heavy and not is_queen_visual:
                 should_generate = False
                 logger.info(
                     "Heavy explicit scene for user_id=%s: forcing local media priority (skipping generation).",
@@ -392,18 +405,26 @@ class MediaService:
             if should_attach_video and x_videos:
                 logger.info("Using keyword-matched X video for user_id=%s", user_id)
                 return self._bundle_from_payload({"images": [], "videos": x_videos[:1]}, text_before_video=True)
-            if x_images and (has_explicit_image_request or should_generate or is_heavy):
+            if x_images and (has_explicit_image_request or should_generate or is_heavy) and not is_queen_visual:
                 logger.info("Using keyword-matched X image for user_id=%s", user_id)
                 return self._bundle_from_payload({"images": x_images[:1], "videos": []})
 
-            if should_generate:
+            if should_generate or is_queen_visual:
                 try:
-                    images = await self.generate_scene_image(prompt=media_context)
+                    # Base the image generation prompt primarily on the *current user request*
+                    # so that heavy keywords from previous context don't pollute the prompt sent to the image model.
+                    gen_prompt = (user_text or "").strip() or media_context
+                    reason = "scene_decision"
+                    if is_queen_visual:
+                        # Use clean prompt focused on the Queen's appearance only
+                        gen_prompt = "the dominant Queen in her signature shiny black latex corset, leather skirt, pantyhose and stiletto heels, elegant and cruel expression, full body view"
+                        reason = "queen_visual_request"
+                    images = await self.generate_scene_image(prompt=gen_prompt)
                     if images:
                         logger.info(
                             "Generated supplemental images for user_id=%s reason=%s",
                             user_id,
-                            "explicit_image_request" if has_explicit_image_request else "scene_decision",
+                            reason,
                         )
                         compact = self._compact_payload(images=images, videos=[], prefer_random=False)
                         return self._bundle_from_payload(compact)
@@ -507,6 +528,11 @@ class MediaService:
                             images.append(mpath)
                         elif p.exists():
                             videos.append(mpath)
+                        else:
+                            # Immediately cleanup the deleted folder from DB
+                            folder = p.parts[0] if p.parts else ""
+                            if folder:
+                                await self.cleanup_x_folder(folder)
                     except Exception:
                         continue
                     break
@@ -516,6 +542,66 @@ class MediaService:
         except Exception as exc:
             logger.exception("Failed to get X assets by keywords: %s", exc)
             return {"images": [], "videos": []}
+
+    async def get_random_valid_x_media(self, user_id: int | None = None) -> str | None:
+        """Return a random existing X media path.
+        Prefers folders that have never been delivered to this user (for diversity).
+        Skips deleted/missing files. Cleans up DB for deleted folders when detected.
+        """
+        if not self.x_assets_service:
+            return None
+
+        used_folders: set[str] = set()
+        if user_id:
+            try:
+                used_folders = await self.delivery_service.get_all_delivered_folders(user_id)
+            except Exception:
+                used_folders = set()
+
+        # Try to get more candidates for better chance of unused folders
+        candidates: list[tuple[str, str]] = []  # (path, folder)
+        try:
+            posts = await self.x_assets_service.get_random_humiliation_post(limit=5)
+            for post in posts:
+                for mpath in post.get("media_paths", []):
+                    if mpath:
+                        try:
+                            p = Path(mpath)
+                            if p.exists():
+                                folder = p.parts[0] if p.parts else ""
+                                candidates.append((mpath, folder))
+                            else:
+                                # Found missing -> cleanup the folder from DB
+                                if folder := (p.parts[0] if p.parts else ""):
+                                    await self.cleanup_x_folder(folder)
+                        except Exception:
+                            continue
+        except Exception:
+            pass
+
+        if not candidates:
+            return None
+
+        # Prefer never-used folders first for diversity
+        unused = [c for c in candidates if c[1] and c[1] not in used_folders]
+        if unused:
+            return random.choice(unused)[0]
+
+        # Fallback to any valid (will still be diverse via RANDOM in DB)
+        return random.choice(candidates)[0]
+
+    async def cleanup_x_folder(self, folder: str) -> int:
+        """Remove all media records for a deleted folder from the X assets DB."""
+        if not folder or not self.x_assets_service:
+            return 0
+        try:
+            deleted = await self.x_assets_service.cleanup_folder(folder)
+            if deleted:
+                logger.info("Cleaned %s invalid X records for deleted folder: %s", deleted, folder)
+            return deleted
+        except Exception as exc:
+            logger.exception("Failed to cleanup X folder %s: %s", folder, exc)
+            return 0
 
     async def _resolve_explicit_video(
         self,
@@ -752,6 +838,12 @@ class MediaService:
         "cuckold scene", "watching her",
     )
 
+    QUEEN_VISUAL_MARKERS: tuple[str, ...] = (
+        "生成形象", "女王的形象", "你的形象", "女王的样子", "你的样子",
+        "看女王", "女王长什么样", "生成女王", "女王形象", "我的形象",
+        "女王外貌", "你的外貌", "女王肖像", "女王肖像画",
+    )
+
     def _is_too_explicit_for_image_generation(self, text: str) -> bool:
         """Return True if the prompt/context is too heavy/explicit for xAI image gen to avoid moderation rejection."""
         if not text:
@@ -762,10 +854,21 @@ class MediaService:
                 return True
         return False
 
+    def _is_queen_visual_request(self, text: str) -> bool:
+        """Detect if user wants to see/generate the Queen's appearance/image specifically."""
+        if not text:
+            return False
+        normalized = text.lower()
+        return any(marker in normalized for marker in self.QUEEN_VISUAL_MARKERS)
+
     async def generate_scene_image(self, *, prompt: str, count: int = 1) -> list[str]:
+        is_queen_visual = self._is_queen_visual_request(prompt)
         if self._is_too_explicit_for_image_generation(prompt):
-            logger.info("Intercepted and skipped image generation for too explicit/heavy content.")
-            return []
+            if is_queen_visual:
+                logger.info("Queen visual requested even in heavy context — allowing clean generation of the Queen's appearance.")
+            else:
+                logger.info("Intercepted and skipped image generation for too explicit/heavy content.")
+                return []
 
         # Sanitize the prompt to remove the heaviest terms before sending to image model
         safe_prompt = self._sanitize_image_prompt(prompt)
@@ -847,12 +950,17 @@ class MediaService:
             return False
 
         # Lowered sensitivity: if too heavy, skip generation and use local media instead
-        if self._is_too_explicit_for_image_generation(context):
+        # Exception: allow if user specifically requested the Queen's image/appearance
+        is_queen_visual = self._is_queen_visual_request(context)
+        if self._is_too_explicit_for_image_generation(context) and not is_queen_visual:
             logger.info(
                 "Heavy explicit content detected for user_id=%s, skipping image generation in favor of local assets.",
                 user_id,
             )
             return False
+        if is_queen_visual:
+            logger.info("Queen visual requested — allowing image generation for user_id=%s.", user_id)
+            return True
 
         if self._has_special_scene_marker(normalized):
             logger.debug("Image generation enabled by visual scene marker for user_id=%s.", user_id)

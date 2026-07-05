@@ -130,6 +130,13 @@ class XAssetsService:
                         valid_paths.append(mp)
                     else:
                         logger.warning("X asset file missing on disk, skipping: %s", mp)
+                        # Cleanup the whole folder from DB
+                        try:
+                            folder = Path(mp).parts[0] if Path(mp).parts else ""
+                            if folder:
+                                await self.cleanup_folder(folder)
+                        except Exception:
+                            pass
                 except Exception:
                     logger.warning("X asset path invalid, skipping: %s", mp)
             if valid_paths:
@@ -188,6 +195,12 @@ class XAssetsService:
                         valid_paths.append(mp)
                     else:
                         logger.warning("X asset file missing on disk (random), skipping: %s", mp)
+                        try:
+                            folder = Path(mp).parts[0] if Path(mp).parts else ""
+                            if folder:
+                                await self.cleanup_folder(folder)
+                        except Exception:
+                            pass
                 except Exception:
                     pass
             if valid_paths:
@@ -216,3 +229,40 @@ class XAssetsService:
         if local_path != cleaned:
             logger.debug("Built X media path: original=%s -> %s", local_path, full_path)
         return full_path
+
+    async def cleanup_folder(self, folder: str) -> int:
+        """Delete all media records whose local_path belongs to the given top-level folder.
+        Used when user deletes a subfolder (e.g. 'Linmistresssh/') so we never try to serve
+        missing files again. Also removes orphan posts.
+        """
+        if not folder:
+            return 0
+        conn = await self._get_conn()
+        if not conn:
+            return 0
+
+        prefix = folder.rstrip("/") + "/"
+        try:
+            # Delete matching media
+            async with conn.execute(
+                "DELETE FROM media WHERE local_path LIKE ?",
+                (prefix + "%",)
+            ) as cursor:
+                deleted = cursor.rowcount if getattr(cursor, "rowcount", None) is not None else 0
+
+            # Clean up orphan posts
+            await conn.execute(
+                """
+                DELETE FROM posts
+                WHERE id NOT IN (SELECT DISTINCT COALESCE(post_id, 0) FROM media)
+                  AND tweet_id NOT IN (SELECT DISTINCT tweet_id FROM media)
+                """
+            )
+
+            await conn.commit()
+            if deleted > 0:
+                logger.info("Cleaned up %s media records for deleted X folder: %s", deleted, folder)
+            return deleted
+        except Exception as exc:
+            logger.exception("Failed to cleanup folder %s from X DB: %s", folder, exc)
+            return 0

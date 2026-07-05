@@ -224,6 +224,43 @@ async def _reply_with_engine_result(
         if media_items:
             media_to_send = media_items[0]  # at most one
 
+    # If the chosen media is a missing X asset (user deleted subfolder), automatically
+    # pick a random valid one from a different folder instead of failing.
+    if media_to_send:
+        k, src, is_loc = media_to_send
+        if is_loc:
+            try:
+                src_path = Path(src)
+                if not src_path.exists():
+                    if "x_assets" in str(src).lower():
+                        folder = src_path.parts[0] if src_path.parts else ""
+                        if folder:
+                            try:
+                                await media_service.cleanup_x_folder(folder)
+                            except Exception:
+                                pass
+                        logger.warning(
+                            "X media subfolder missing (deleted by user?): %s. Auto-selecting random from another (preferably unused) folder.",
+                            src
+                        )
+                        fb = None
+                        try:
+                            uid = getattr(message, "from_user", None)
+                            uid = getattr(uid, "id", None) if uid else None
+                            fb = await media_service.get_random_valid_x_media(uid)
+                        except Exception as fb_exc:
+                            logger.warning("X fallback lookup failed: %s", fb_exc)
+                        if fb and Path(fb).exists():
+                            logger.info("Using random X fallback media: %s", fb)
+                            media_to_send = (k, fb, True)
+                        else:
+                            # No valid fallback -> send text only, no media
+                            for chunk in split_reply_text(result.text):
+                                await message.answer(chunk, reply_markup=None)
+                            return
+            except Exception:
+                pass
+
     if media_to_send:
         # send text chunks without keyboard (keyboard goes on the media)
         chunks = split_reply_text(result.text)

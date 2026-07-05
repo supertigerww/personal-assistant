@@ -68,7 +68,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "Generate a supplemental image ONLY when local media is clearly insufficient and a concrete visual would help. "
             "NEVER use for extremely graphic, scatological, bodily-fluid-heavy or highly degrading scenes — these will be automatically intercepted to avoid content moderation rejection. "
             "Keep image prompts artistic and visual rather than explicit. "
-            "IMPORTANT: Do NOT mention in your response text that you are generating or have generated any image (especially not '女王的形象' or '我为你生成'). The system will attach the image if successful; your text should only guide the user to look if it is attached."
+            "IMPORTANT: Do NOT mention in your response text that you are generating or have generated any image (especially not '女王的形象' or '我为你生成'). The system will attach the image if successful; your text should only guide the user to look if it is attached. "
+            "Special: If user wants the Queen's appearance ('生成形象', '女王的样子'), call this with a clean prompt like 'the dominant Queen in latex corset and heels, full body portrait' — this is allowed even in heavy scenes."
         ),
         "parameters": {
             "type": "object",
@@ -773,7 +774,9 @@ class QueenEngine:
                     "state": str(current_profile.state),
                 }, None, []
             # Auto-intercept heavy explicit content to avoid xAI content moderation rejection
-            if self.media_service._is_too_explicit_for_image_generation(prompt):
+            # Exception: allow if the request is specifically for the Queen's appearance/image
+            is_queen_visual = self.media_service._is_queen_visual_request(prompt)
+            if self.media_service._is_too_explicit_for_image_generation(prompt) and not is_queen_visual:
                 logger.info(
                     "Intercepted heavy explicit image generation request for user_id=%s (avoiding moderation block).",
                     current_profile.telegram_user_id,
@@ -784,6 +787,8 @@ class QueenEngine:
                     "message": "此场景过于重口，图片生成已被自动拦截。请优先使用本地素材库中的图片/视频，或用文字详细描述。",
                     "state": str(current_profile.state),
                 }, None, []
+            if is_queen_visual:
+                logger.info("Queen visual tool call allowed for user_id=%s even in explicit context.", current_profile.telegram_user_id)
             count = max(1, min(int(arguments.get("count", 1)), 4))
             urls = await self.media_service.generate_scene_image(prompt=prompt, count=count)
             logger.info(

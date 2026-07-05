@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -54,3 +55,27 @@ class MediaDeliveryService:
             (telegram_user_id, cutoff),
         )
         return {row["asset_path"] for row in rows}
+
+    async def get_all_delivered_folders(self, telegram_user_id: int) -> set[str]:
+        """Return set of top-level folders (e.g. 'Linmistresssh') that have ever been delivered to this user."""
+        if self.database is None:
+            return set()
+
+        rows = await self.database.fetchall(
+            """
+            SELECT DISTINCT asset_path
+            FROM media_deliveries
+            WHERE telegram_user_id = ?
+            """,
+            (telegram_user_id,),
+        )
+        folders: set[str] = set()
+        for row in rows:
+            path = row["asset_path"] or ""
+            try:
+                parts = Path(path).parts
+                if parts:
+                    folders.add(parts[0])
+            except Exception:
+                continue
+        return folders
