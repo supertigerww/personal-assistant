@@ -16,6 +16,7 @@ from core.queen_engine import QueenEngine
 from db.chroma_client import create_chroma_client
 from db.database import Database
 from services.media_service import MediaService
+from services.x_assets_service import XAssetsService
 from services.memory_service import MemoryService
 from services.onboarding_service import OnboardingService
 from services.safety_service import SafetyService
@@ -61,12 +62,17 @@ async def main() -> None:
             logger.info("Long-term Chroma memory disabled.")
         grok_client = GrokClient(settings=settings)
 
+        x_assets_service = XAssetsService(
+            db_path=str(getattr(settings, "x_assets_db_path", "/app/assets/x_data/x_assets.db")),
+            assets_root=str(getattr(settings, "x_assets_root", "/app/assets/x_assets")),
+        )
         # MediaService accepts optional user_service and database for state-aware media decisions and delivery tracking.
         media_service = MediaService(
             settings=settings,
             grok_client=grok_client,
             user_service=user_service,
             database=database,
+            x_assets_service=x_assets_service,
         )
         safety_service = SafetyService(
             settings=settings,
@@ -89,6 +95,7 @@ async def main() -> None:
             safety_service=safety_service,
             context_builder=context_builder,
             onboarding_service=onboarding_service,
+            x_assets_service=x_assets_service,
         )
         logger.info("Core services initialized successfully.")
 
@@ -109,6 +116,7 @@ async def main() -> None:
                 "media_service": media_service,
                 "memory_service": memory_service,
                 "processing_gate": processing_gate,
+                "x_assets_service": x_assets_service,
             }
         )
         logger.info("Dispatcher workflow data initialized.")

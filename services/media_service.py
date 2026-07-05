@@ -132,6 +132,7 @@ class MediaService:
         grok_client: Any,
         user_service: Any | None = None,
         database: Any | None = None,
+        x_assets_service: Any | None = None,
     ) -> None:
         self.settings = settings
         self.grok_client = grok_client
@@ -140,8 +141,12 @@ class MediaService:
         self._visual_anchor = load_visual_anchor(settings)
         self.images_path = Path(settings.assets_images_path)
         self.videos_path = Path(settings.assets_videos_path)
+        self.x_assets_service = x_assets_service
+        self.x_assets_root = Path(getattr(settings, "x_assets_root", "/app/assets/x_assets"))
         self._prepare_media_root(self.images_path, label="images")
         self._prepare_media_root(self.videos_path, label="videos")
+        if self.x_assets_service:
+            logger.info("MediaService configured with X assets from %s", self.x_assets_root)
         logger.info(
             "MediaService configured for recursive asset scan. images_path=%s videos_path=%s image_generation_enabled=%s generated_images_path=%s",
             self.images_path,
@@ -155,14 +160,23 @@ class MediaService:
             images = self._list_assets(self.images_path, self.IMAGE_SUFFIXES)
             videos = self._list_assets(self.videos_path, self.VIDEO_SUFFIXES)
             category_index = self._build_video_category_index(videos)
+            x_count = 0
+            if self.x_assets_service:
+                try:
+                    x_posts = await self.x_assets_service.search_humiliation_posts(keywords=[], limit=100)
+                    for p in x_posts:
+                        x_count += len(p.get("media_paths", []))
+                except Exception:
+                    pass
             return {
                 "images": len(images),
                 "videos": len(videos),
                 "video_categories": category_index.folder_counts,
+                "x_assets": x_count,
             }
         except Exception as exc:
             logger.exception("Failed to summarize local assets: %s", exc)
-            return {"images": 0, "videos": 0, "video_categories": {}}
+            return {"images": 0, "videos": 0, "video_categories": {}, "x_assets": 0}
 
     def video_categories_context(self, *, media_summary: dict[str, int | dict[str, int]] | None = None) -> str:
         if media_summary is not None:
@@ -207,6 +221,22 @@ class MediaService:
                     recent_paths=recent_paths,
                     media_kind="image",
                 )
+
+            # Keyword scan for X assets
+            if self.x_assets_service:
+                try:
+                    x_kw = self._extract_keywords(text)
+                    if x_kw:
+                        x_posts = await self.x_assets_service.search_humiliation_posts(keywords=x_kw, limit=1)
+                        for post in x_posts:
+                            for m in post.get("media_paths", []):
+                                p = Path(m)
+                                if p.suffix.lower() in self.IMAGE_SUFFIXES:
+                                    return {"images": [m], "videos": []}
+                                else:
+                                    return {"images": [], "videos": [m]}
+                except Exception as exc:
+                    logger.exception("X keyword pick failed: %s", exc)
 
             logger.debug("No direct local media match found; returning random assets.")
             return await self.get_random_assets(image_count=1, video_count=0, user_id=user_id)
@@ -281,6 +311,11 @@ class MediaService:
             recent_paths = await self._recent_paths_for_user(user_id)
             outcome = await self._search_assets(media_context, user_id=user_id)
 
+            # Add keyword scanning for local X assets (from DB)
+            x_payload = await self._get_x_assets_by_keywords(
+                keywords or self._extract_keywords(media_context)
+            )
+
             should_attach_video = resolve_video_attachment(
                 user_text=user_text,
                 response_text=response_text,
@@ -300,6 +335,12 @@ class MediaService:
                 if should_attach_video
                 else {"images": [], "videos": []}
             )
+
+            # Merge X keyword matches
+            if x_payload.get("images"):
+                image_payload["images"] = image_payload.get("images", []) + x_payload["images"]
+            if x_payload.get("videos"):
+                video_payload["videos"] = video_payload.get("videos", []) + x_payload["videos"]
 
             normalized = media_context.strip().casefold()
             has_explicit_image_request = self._has_explicit_media_request(normalized) and not has_explicit_video_request(
@@ -346,6 +387,16 @@ class MediaService:
             if has_explicit_image_request and strong_image_match:
                 logger.info("Using local image for explicit image request user_id=%s", user_id)
                 return self._bundle_from_payload(image_payload)
+
+            # Keyword-matched X assets take priority for relevant context
+            x_images = x_payload.get("images", [])
+            x_videos = x_payload.get("videos", [])
+            if should_attach_video and x_videos:
+                logger.info("Using keyword-matched X video for user_id=%s", user_id)
+                return self._bundle_from_payload({"images": [], "videos": x_videos[:1]}, text_before_video=True)
+            if x_images and (has_explicit_image_request or should_generate):
+                logger.info("Using keyword-matched X image for user_id=%s", user_id)
+                return self._bundle_from_payload({"images": x_images[:1], "videos": []})
 
             if should_generate:
                 try:
@@ -438,6 +489,28 @@ class MediaService:
             return self._compact_payload(images=selected_images, videos=selected_videos, prefer_random=True)
         except Exception as exc:
             logger.exception("Failed to load random assets: %s", exc)
+            return {"images": [], "videos": []}
+
+    async def _get_x_assets_by_keywords(self, keywords: list[str]) -> dict[str, list[str]]:
+        """Keyword scan for local X assets from DB. Returns dict with 'images' and 'videos' lists of full paths."""
+        if not self.x_assets_service or not keywords:
+            return {"images": [], "videos": []}
+        try:
+            posts = await self.x_assets_service.search_humiliation_posts(
+                keywords=keywords, limit=5
+            )
+            images = []
+            videos = []
+            for post in posts:
+                for mpath in post.get("media_paths", []):
+                    p = Path(mpath)
+                    if p.suffix.lower() in self.IMAGE_SUFFIXES:
+                        images.append(mpath)
+                    else:
+                        videos.append(mpath)
+            return {"images": images, "videos": videos}
+        except Exception as exc:
+            logger.exception("Failed to get X assets by keywords: %s", exc)
             return {"images": [], "videos": []}
 
     async def _resolve_explicit_video(
@@ -1042,10 +1115,11 @@ class MediaService:
                 item.score,
                 item.folder_hits,
                 item.filename_hits,
-                item.path.as_posix().casefold(),
             ),
             reverse=True,
         )
+        # Note: no path in key so that within same score, order is from shuffled input list -> random among ties
+        # This ensures we don't always pick the "first" file/folder by name
         return ranked
 
     def _score_asset(
@@ -1395,6 +1469,9 @@ class MediaService:
 
         if skipped_oversized:
             logger.info("Skipped %s oversized media file(s) under %s", skipped_oversized, base_path)
+
+        # Shuffle the list so selection is random and doesn't always start from the first subfolder/first file
+        random.shuffle(assets)
         return assets
 
     def _compact_payload(

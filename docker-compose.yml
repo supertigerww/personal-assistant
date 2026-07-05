@@ -11,6 +11,8 @@ services:
       - ${HOST_DATA_PATH:-./data}:/app/data
       - ${HOST_ASSETS_IMAGES_PATH:-./assets/images}:${CONTAINER_ASSETS_IMAGES_PATH:-/app/assets/images}
       - ${HOST_ASSETS_VIDEOS_PATH:-./assets/videos}:${CONTAINER_ASSETS_VIDEOS_PATH:-/app/assets/videos}
+      - ${HOST_X_ASSETS_PATH:-/vol1/1000/docker/assets/images}:${CONTAINER_X_ASSETS_PATH:-/app/assets/x_assets}
+      - ${HOST_X_DB_PATH:-/vol1/1000/docker/assets/data}:${CONTAINER_X_DB_PATH:-/app/assets/x_data}
 
 networks:
   telegram-shared:

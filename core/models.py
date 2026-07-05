@@ -104,6 +104,7 @@ class EngineResult:
     show_quick_replies: bool = False
     has_open_task: bool = False
     suggested_video_foreshadow: str | None = None  # Rich creative foreshadow from media service for enhanced delivery
+    x_humiliation_posts: list[dict] = field(default_factory=list)  # from local X assets for humiliation text + media
 
 
 @dataclass(slots=True)

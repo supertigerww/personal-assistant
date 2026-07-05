@@ -7,6 +7,7 @@ from typing import Literal
 from aiogram import F, Router
 from aiogram.exceptions import TelegramEntityTooLarge
 from aiogram.types import FSInputFile, Message
+import random
 
 from bot.handlers.chat_actions import keep_typing
 from bot.handlers.keyboards import build_quick_reply_keyboard
@@ -184,7 +185,7 @@ async def _reply_with_engine_result(
         chunks = split_reply_text(text_to_use)
         for index, chunk in enumerate(chunks):
             has_followup_media = bool(
-                result.local_image_paths or result.generated_image_urls or result.local_video_paths
+                result.local_image_paths or result.generated_image_urls or result.local_video_paths or getattr(result, "x_humiliation_posts", None)
             )
             markup = keyboard if index == len(chunks) - 1 and not has_followup_media else None
             await message.answer(chunk, reply_markup=markup)
@@ -210,7 +211,38 @@ async def _reply_with_engine_result(
                 caption=video_caption,
                 reply_markup=keyboard if video_path == result.local_video_paths[-1] else None,
             )
+
+        # Send media from X posts (local DB or search) to enhance humiliation.
+        # Text is already digested into the main response by the Queen (no source mentions).
+        if getattr(result, "x_humiliation_posts", None):
+            x_posts = list(result.x_humiliation_posts)
+            random.shuffle(x_posts)  # ensure random order, not first folder/file
+            for post in x_posts:
+                for mpath in post.get("media_paths", []):
+                    kind = _detect_media_kind(mpath, default="photo")
+                    try:
+                        await _send_single_media(
+                            message,
+                            (kind, mpath, True),
+                        )
+                    except Exception as e:
+                        logger.warning("Failed to send X media %s: %s", mpath, e)
         return
+
+    # Also send X media in the general media sequence case
+    if getattr(result, "x_humiliation_posts", None):
+        x_posts = list(result.x_humiliation_posts)
+        random.shuffle(x_posts)  # randomize to not start from first subfolder/file
+        for post in x_posts:
+            for mpath in post.get("media_paths", []):
+                kind = _detect_media_kind(mpath, default="photo")
+                try:
+                    await _send_single_media(
+                        message,
+                        (kind, mpath, True),
+                    )
+                except Exception as e:
+                    logger.warning("Failed to send X media %s: %s", mpath, e)
 
     media_items = _build_media_items(result)
     if media_items:
@@ -221,6 +253,21 @@ async def _reply_with_engine_result(
     for index, chunk in enumerate(chunks):
         markup = keyboard if index == len(chunks) - 1 else None
         await message.answer(chunk, reply_markup=markup)
+
+    # Fallback: send any X media if not sent in other branches
+    if getattr(result, "x_humiliation_posts", None):
+        x_posts = list(result.x_humiliation_posts)
+        random.shuffle(x_posts)  # ensure random order, not first subfolder/file
+        for post in x_posts:
+            for mpath in post.get("media_paths", []):
+                kind = _detect_media_kind(mpath, default="photo")
+                try:
+                    await _send_single_media(
+                        message,
+                        (kind, mpath, True),
+                    )
+                except Exception as e:
+                    logger.warning("Failed to send X media %s: %s", mpath, e)
 
 
 def _build_media_items(result: EngineResult) -> list[MediaItem]:

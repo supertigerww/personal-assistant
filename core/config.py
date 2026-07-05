@@ -93,6 +93,8 @@ class Settings(BaseSettings):
         "sm=调教,SM,训练,支配,鞭打,束缚,女王,贱狗,跪下,学着,示范;"
         "pov=第一视角,视角,羞辱,撸,自慰,手,寸止,边缘,不许射,停下,憋住,对着录,盯着,POV,fpov,看着我,射,套路"
     )
+    x_assets_db_path: str = "/app/assets/x_data/x_assets.db"
+    x_assets_root: str = "/app/assets/x_assets"
     @property
     def aftercare_duration_minutes(self) -> int:
         return self.aftercare_minutes
