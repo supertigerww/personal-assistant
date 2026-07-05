@@ -219,14 +219,22 @@ async def _reply_with_engine_result(
             random.shuffle(x_posts)  # ensure random order, not first folder/file
             for post in x_posts:
                 for mpath in post.get("media_paths", []):
-                    kind = _detect_media_kind(mpath, default="photo")
+                    # Normalize path in case DB stored with extra prefix
+                    cleaned = mpath
+                    for bad in ["app/images/", "images/", "app/assets/images/", "assets/images/"]:
+                        if cleaned.startswith(bad):
+                            cleaned = cleaned[len(bad):]
+                            break
+                    if not cleaned.startswith("/"):
+                        cleaned = str(Path("/app/assets/x_assets") / cleaned.lstrip("/"))
+                    kind = _detect_media_kind(cleaned, default="photo")
                     try:
                         await _send_single_media(
                             message,
-                            (kind, mpath, True),
+                            (kind, cleaned, True),
                         )
                     except Exception as e:
-                        logger.warning("Failed to send X media %s: %s", mpath, e)
+                        logger.warning("Failed to send X media %s: %s", cleaned, e)
         return
 
     # Also send X media in the general media sequence case
@@ -235,14 +243,21 @@ async def _reply_with_engine_result(
         random.shuffle(x_posts)  # randomize to not start from first subfolder/file
         for post in x_posts:
             for mpath in post.get("media_paths", []):
-                kind = _detect_media_kind(mpath, default="photo")
+                cleaned = mpath
+                for bad in ["app/images/", "images/", "app/assets/images/", "assets/images/"]:
+                    if cleaned.startswith(bad):
+                        cleaned = cleaned[len(bad):]
+                        break
+                if not cleaned.startswith("/"):
+                    cleaned = str(Path("/app/assets/x_assets") / cleaned.lstrip("/"))
+                kind = _detect_media_kind(cleaned, default="photo")
                 try:
                     await _send_single_media(
                         message,
-                        (kind, mpath, True),
+                        (kind, cleaned, True),
                     )
                 except Exception as e:
-                    logger.warning("Failed to send X media %s: %s", mpath, e)
+                    logger.warning("Failed to send X media %s: %s", cleaned, e)
 
     media_items = _build_media_items(result)
     if media_items:
@@ -260,14 +275,21 @@ async def _reply_with_engine_result(
         random.shuffle(x_posts)  # ensure random order, not first subfolder/file
         for post in x_posts:
             for mpath in post.get("media_paths", []):
-                kind = _detect_media_kind(mpath, default="photo")
+                cleaned = mpath
+                for bad in ["app/images/", "images/", "app/assets/images/", "assets/images/"]:
+                    if cleaned.startswith(bad):
+                        cleaned = cleaned[len(bad):]
+                        break
+                if not cleaned.startswith("/"):
+                    cleaned = str(Path("/app/assets/x_assets") / cleaned.lstrip("/"))
+                kind = _detect_media_kind(cleaned, default="photo")
                 try:
                     await _send_single_media(
                         message,
-                        (kind, mpath, True),
+                        (kind, cleaned, True),
                     )
                 except Exception as e:
-                    logger.warning("Failed to send X media %s: %s", mpath, e)
+                    logger.warning("Failed to send X media %s: %s", cleaned, e)
 
 
 def _build_media_items(result: EngineResult) -> list[MediaItem]:

@@ -117,7 +117,7 @@ class XAssetsService:
                 }
             local_path = row["local_path"]
             if local_path:
-                full_path = str(self.assets_root / local_path.lstrip("/"))
+                full_path = self._build_full_media_path(local_path)
                 posts_dict[tweet_id]["media_paths"].append(full_path)
 
         results = list(posts_dict.values())[:limit]
@@ -162,8 +162,27 @@ class XAssetsService:
                 }
             local_path = row["local_path"]
             if local_path:
-                full_path = str(self.assets_root / local_path.lstrip("/"))
+                full_path = self._build_full_media_path(local_path)
                 posts_dict[tweet_id]["media_paths"].append(full_path)
 
         results = list(posts_dict.values())[:limit]
         return results
+
+    def _build_full_media_path(self, local_path: str) -> str:
+        """Build full container path, stripping common wrong prefixes that may be stored in the DB.
+        The mount makes the images dir available at self.assets_root (/app/assets/x_assets).
+        """
+        if not local_path:
+            return ""
+        cleaned = local_path.lstrip("/")
+        # Strip bad prefixes that the download script apparently recorded (e.g. 'app/images/...')
+        # This fixes paths like /app/assets/x_assets/app/images/... becoming correct /app/assets/x_assets/...
+        bad_prefixes = [
+            "app/images/", "images/", "app/assets/images/", "assets/images/",
+            "app/", "docker/assets/images/"
+        ]
+        for bad in bad_prefixes:
+            if cleaned.startswith(bad):
+                cleaned = cleaned[len(bad):]
+                break
+        return str(self.assets_root / cleaned)
