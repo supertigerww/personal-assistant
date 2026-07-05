@@ -35,7 +35,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "Create ONE formal task ONLY when task_window_ready is true and no open task exists. "
             "Photo verification tasks additionally require photo_task_window_ready=true. "
             "Photo tasks must stay rare. Skip if unsure — most replies should not include a task. "
-            "Do not use for casual verbal commands or humiliation that belongs in normal dialogue."
+            "Do not use for casual verbal commands or humiliation that belongs in normal dialogue. "
+            "Tasks MUST be creative, varied, and human-like — NEVER default to 'repeat this phrase 10 times'. "
+            "Draw from the current scene, user's specific fetishes (cuckold, sissy, denial, foot, etc.), recent X content, or long-term memory. "
+            "Make tasks immersive and commanding: detailed writing assignments, physical training with reporting, fantasy enactments, service rituals, photo descriptions (rare), etc. "
+            "Vary format, duration, and creativity every time so it feels fresh and personal, not robotic."
         ),
         "parameters": {
             "type": "object",
