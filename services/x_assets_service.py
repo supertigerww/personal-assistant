@@ -20,6 +20,9 @@ class XAssetsService:
         db_path: str = "/app/assets/x_data/x_assets.db",
         assets_root: str = "/app/assets/x_assets",
     ) -> None:
+        # db_path and assets_root are container paths.
+        # User sets HOST_X_ASSETS_PATH and HOST_X_DB_PATH in .env for docker mount.
+        # DB may be in separate dir from media root.
         """DB and root are container paths after Docker volume mount.
         Set via .env HOST_X_ASSETS_PATH and CONTAINER_X_ASSETS_PATH.
         Assumes your download script saves 'media_paths' as list of paths RELATIVE to the assets_root (e.g. 'subfolder/post123.jpg').

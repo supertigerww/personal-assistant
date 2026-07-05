@@ -312,9 +312,8 @@ class MediaService:
             outcome = await self._search_assets(media_context, user_id=user_id)
 
             # Add keyword scanning for local X assets (from DB)
-            x_payload = await self._get_x_assets_by_keywords(
-                keywords or self._extract_keywords(media_context)
-            )
+            keywords = self._extract_keywords(media_context)
+            x_payload = await self._get_x_assets_by_keywords(keywords)
 
             should_attach_video = resolve_video_attachment(
                 user_text=user_text,
@@ -336,12 +335,6 @@ class MediaService:
                 else {"images": [], "videos": []}
             )
 
-            # Merge X keyword matches
-            if x_payload.get("images"):
-                image_payload["images"] = image_payload.get("images", []) + x_payload["images"]
-            if x_payload.get("videos"):
-                video_payload["videos"] = video_payload.get("videos", []) + x_payload["videos"]
-
             normalized = media_context.strip().casefold()
             has_explicit_image_request = self._has_explicit_media_request(normalized) and not has_explicit_video_request(
                 media_context
@@ -350,8 +343,9 @@ class MediaService:
             strong_video_match = should_attach_video and self._is_good_video_match(outcome, media_context)
             should_generate = await self._should_generate(media_context, user_id, profile=profile)
 
+            is_heavy = self._is_too_explicit_for_image_generation(media_context)
             # For heavy/explicit scenes that would be intercepted, explicitly prefer local media first
-            if self._is_too_explicit_for_image_generation(media_context):
+            if is_heavy:
                 should_generate = False
                 logger.info(
                     "Heavy explicit scene for user_id=%s: forcing local media priority (skipping generation).",
@@ -394,7 +388,7 @@ class MediaService:
             if should_attach_video and x_videos:
                 logger.info("Using keyword-matched X video for user_id=%s", user_id)
                 return self._bundle_from_payload({"images": [], "videos": x_videos[:1]}, text_before_video=True)
-            if x_images and (has_explicit_image_request or should_generate):
+            if x_images and (has_explicit_image_request or should_generate or is_heavy):
                 logger.info("Using keyword-matched X image for user_id=%s", user_id)
                 return self._bundle_from_payload({"images": x_images[:1], "videos": []})
 
