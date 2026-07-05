@@ -11,8 +11,12 @@ logger = logging.getLogger(__name__)
 
 
 class XAssetsService:
-    """Service to query local X (Twitter) assets downloaded from user's script.
-    DB contains posts with text, author, media paths (relative to x_assets dir), metadata.
+    """Service for local X assets DB (posts + media from user's download script).
+    Schema:
+      - posts: id, tweet_id, author_x_user_id, username, created_at, tweet_url, text, lang, raw_json, inserted_at
+      - media: id, post_id, media_key, type, local_path, original_url, alt_text, width, height, image_description, tags, ...
+      - media_search_fts: tweet_id, post_text, alt_text, image_description, tags
+    local_path in media is relative to the x_assets mount point.
     """
 
     def __init__(
@@ -21,13 +25,10 @@ class XAssetsService:
         assets_root: str = "/app/assets/x_assets",
     ) -> None:
         # db_path and assets_root are container paths.
-        # User sets HOST_X_ASSETS_PATH and HOST_X_DB_PATH in .env for docker mount.
-        # DB may be in separate dir from media root.
-        """DB and root are container paths after Docker volume mount.
-        Set via .env HOST_X_ASSETS_PATH and CONTAINER_X_ASSETS_PATH.
-        Assumes your download script saves 'media_paths' as list of paths RELATIVE to the assets_root (e.g. 'subfolder/post123.jpg').
-        If your DB uses absolute host paths, adjust the media path construction here or normalize in your script.
-        """
+        # Mount:
+        #   HOST_X_ASSETS_PATH (your images dir) -> CONTAINER_X_ASSETS_PATH=/app/assets/x_assets
+        #   HOST_X_DB_PATH (your data dir with x_assets.db) -> /app/assets/x_data
+        # local_path in DB media table is relative to the x_assets mount.
         self.db_path = Path(db_path)
         self.assets_root = Path(assets_root)
         self._conn: aiosqlite.Connection | None = None
@@ -52,114 +53,117 @@ class XAssetsService:
         limit: int = 5,
         styles: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Search posts whose text matches any of the keywords (for humiliation).
-        Returns list of dicts with text, author, media_paths (full container paths), metadata.
-        NOTE: Assumes table 'posts' with columns: id, author, text, media_paths (JSON list of RELATIVE paths under x_assets), metadata (JSON), created_at.
-        Adjust table name / columns to match your download script's schema if different.
+        """Search using media_search_fts for relevance, then join to posts + media.
+        Returns posts with text, author (username), media_paths (full container paths), etc.
+        Keywords are used for FTS MATCH.
         """
         if not keywords:
-            keywords = ["羞辱", "调教", "女王", "绿帽", "母狗"]  # default
+            keywords = ["羞辱", "调教", "女王", "绿帽", "母狗", "圣水", "寸止"]
 
         conn = await self._get_conn()
         if not conn:
             return []
 
-        # Build query: match any keyword in text (case insensitive, simple LIKE for simplicity)
-        # For better, could use FTS, but assume simple.
-        like_clauses = []
-        params: list[str] = []
-        for kw in keywords:
-            like_clauses.append("text LIKE ?")
-            params.append(f"%{kw}%")
+        # Build FTS match query (simple OR for the keywords)
+        match_terms = " OR ".join(f'"{kw}"' for kw in keywords if kw)
+        if not match_terms:
+            match_terms = "*"
 
-        where = " OR ".join(like_clauses) if like_clauses else "1=1"
-
-        # Optionally filter by style in metadata if stored
-        if styles:
-            # assume metadata has "styles" or text has them
-            where += " AND (text LIKE ? OR metadata LIKE ?)"
-            params.extend([f"%{styles}%", f"%{styles}%"])
-
-        query = f"""
-            SELECT id, author, text, media_paths, metadata, created_at
-            FROM posts
-            WHERE {where}
+        # Query via FTS for relevant tweet_ids, then join posts + media
+        # Limit fetch to avoid huge results, then take distinct posts
+        query = """
+            SELECT DISTINCT
+                p.id,
+                p.tweet_id,
+                p.username,
+                p.text,
+                p.tweet_url,
+                p.created_at,
+                m.local_path,
+                m.type,
+                m.alt_text,
+                m.image_description,
+                m.tags
+            FROM media_search_fts fts
+            JOIN posts p ON p.tweet_id = fts.tweet_id
+            JOIN media m ON (m.post_id = p.id OR m.post_id = p.tweet_id)
+            WHERE fts.media_search_fts MATCH ?
+              AND m.type IN ('photo', 'video')
+              AND m.local_path IS NOT NULL
             ORDER BY RANDOM()
             LIMIT ?
         """
-        params.append(str(limit))
 
         try:
-            async with conn.execute(query, params) as cursor:
+            async with conn.execute(query, (match_terms, limit * 3)) as cursor:
                 rows = await cursor.fetchall()
         except Exception as exc:
             logger.exception("Failed to query X assets DB: %s", exc)
             return []
 
-        results = []
+        # Group media by post
+        posts_dict = {}
         for row in rows:
-            try:
-                media_list = json.loads(row["media_paths"] or "[]")
-            except Exception:
-                media_list = []
+            tweet_id = row["tweet_id"]
+            if tweet_id not in posts_dict:
+                posts_dict[tweet_id] = {
+                    "id": row["id"],
+                    "tweet_id": tweet_id,
+                    "author": row["username"],
+                    "text": row["text"],
+                    "tweet_url": row["tweet_url"],
+                    "created_at": row["created_at"],
+                    "media_paths": [],
+                }
+            local_path = row["local_path"]
+            if local_path:
+                full_path = str(self.assets_root / local_path.lstrip("/"))
+                posts_dict[tweet_id]["media_paths"].append(full_path)
 
-            full_media = []
-            for m in media_list:
-                # media_paths are relative to the x_assets dir
-                full_path = str(self.assets_root / m)
-                full_media.append(full_path)
-
-            meta = {}
-            try:
-                meta = json.loads(row["metadata"] or "{}")
-            except Exception:
-                pass
-
-            results.append({
-                "id": row["id"],
-                "author": row["author"],
-                "text": row["text"],
-                "media_paths": full_media,  # container paths
-                "metadata": meta,
-                "created_at": row["created_at"],
-            })
-
-        logger.info("Fetched %s X humiliation posts for keywords=%s", len(results), keywords)
+        results = list(posts_dict.values())[:limit]
+        logger.info("Fetched %s X humiliation posts for keywords=%s via FTS", len(results), keywords)
         return results
 
     async def get_random_humiliation_post(self, limit: int = 1) -> list[dict[str, Any]]:
-        """Get random recent posts for variety."""
+        """Get random posts with media for variety (uses posts + media join)."""
         conn = await self._get_conn()
         if not conn:
             return []
 
         query = """
-            SELECT id, author, text, media_paths, metadata, created_at
-            FROM posts
+            SELECT p.id, p.tweet_id, p.username, p.text, p.tweet_url, p.created_at,
+                   m.local_path, m.type
+            FROM posts p
+            JOIN media m ON (m.post_id = p.id OR m.post_id = p.tweet_id)
+            WHERE m.type IN ('photo', 'video')
+              AND m.local_path IS NOT NULL
             ORDER BY RANDOM()
             LIMIT ?
         """
         try:
-            async with conn.execute(query, (limit,)) as cursor:
+            async with conn.execute(query, (limit * 3,)) as cursor:
                 rows = await cursor.fetchall()
         except Exception as exc:
             logger.exception("Failed random X query: %s", exc)
             return []
 
-        results = []
+        posts_dict = {}
         for row in rows:
-            try:
-                media_list = json.loads(row["media_paths"] or "[]")
-            except Exception:
-                media_list = []
-            full_media = [str(self.assets_root / m) for m in media_list]
-            meta = json.loads(row["metadata"] or "{}") if row["metadata"] else {}
-            results.append({
-                "id": row["id"],
-                "author": row["author"],
-                "text": row["text"],
-                "media_paths": full_media,
-                "metadata": meta,
-                "created_at": row["created_at"],
-            })
+            tweet_id = row["tweet_id"]
+            if tweet_id not in posts_dict:
+                posts_dict[tweet_id] = {
+                    "id": row["id"],
+                    "tweet_id": tweet_id,
+                    "author": row["username"],
+                    "text": row["text"],
+                    "tweet_url": row["tweet_url"],
+                    "created_at": row["created_at"],
+                    "media_paths": [],
+                }
+            local_path = row["local_path"]
+            if local_path:
+                full_path = str(self.assets_root / local_path.lstrip("/"))
+                posts_dict[tweet_id]["media_paths"].append(full_path)
+
+        results = list(posts_dict.values())[:limit]
         return results

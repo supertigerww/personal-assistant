@@ -12,6 +12,7 @@ services:
       - ${HOST_ASSETS_IMAGES_PATH:-./assets/images}:${CONTAINER_ASSETS_IMAGES_PATH:-/app/assets/images}
       - ${HOST_ASSETS_VIDEOS_PATH:-./assets/videos}:${CONTAINER_ASSETS_VIDEOS_PATH:-/app/assets/videos}
       - ${HOST_X_ASSETS_PATH:-/vol1/1000/docker/assets/images}:${CONTAINER_X_ASSETS_PATH:-/app/assets/x_assets}
+      # Separate mount for DB dir (your data/ containing x_assets.db)
       - ${HOST_X_DB_PATH:-/vol1/1000/docker/assets/data}:${CONTAINER_X_DB_PATH:-/app/assets/x_data}
 
 networks:
