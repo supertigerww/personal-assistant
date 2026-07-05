@@ -247,6 +247,22 @@ class MediaService:
                     logger.exception("X keyword pick failed: %s", exc)
 
             logger.debug("No direct local media match found; returning random assets.")
+
+            # If no keyword match, randomly pick local or X post to humiliate (per user preference)
+            if self.x_assets_service and random.random() < 0.5:
+                try:
+                    rand_x = await self.get_random_valid_x_media(user_id)
+                    if rand_x:
+                        p = Path(rand_x)
+                        if p.exists():
+                            if p.suffix.lower() in self.IMAGE_SUFFIXES:
+                                logger.info("No keyword match, randomly picked X post (local or X) for user_id=%s", user_id)
+                                return {"images": [rand_x], "videos": []}
+                            else:
+                                return {"images": [], "videos": [rand_x]}
+                except Exception:
+                    pass
+
             return await self.get_random_assets(image_count=1, video_count=0, user_id=user_id)
         except Exception as exc:
             logger.exception("Failed to pick relevant assets: %s", exc)
@@ -405,9 +421,14 @@ class MediaService:
             if should_attach_video and x_videos:
                 logger.info("Using keyword-matched X video for user_id=%s", user_id)
                 return self._bundle_from_payload({"images": [], "videos": x_videos[:1]}, text_before_video=True)
-            if x_images and (has_explicit_image_request or should_generate or is_heavy) and not is_queen_visual:
-                logger.info("Using keyword-matched X image for user_id=%s", user_id)
-                return self._bundle_from_payload({"images": x_images[:1], "videos": []})
+            if x_images or x_videos:
+                # Use X assets (from keyword match OR random fallback when no match) to humiliate
+                if should_attach_video and x_videos:
+                    logger.info("Using X video (keyword or random fallback) for user_id=%s", user_id)
+                    return self._bundle_from_payload({"images": [], "videos": x_videos[:1]}, text_before_video=True)
+                if x_images:
+                    logger.info("Using X image (keyword or random fallback when no match) for user_id=%s", user_id)
+                    return self._bundle_from_payload({"images": x_images[:1], "videos": []})
 
             if should_generate or is_queen_visual:
                 try:
@@ -468,6 +489,23 @@ class MediaService:
             ):
                 logger.info("Skipped automatic media for user_id=%s after probability gate.", user_id)
                 return empty
+
+            # If no strong keyword match (local or X), randomly pick from local or X posts
+            # to humiliate the user (as requested: when matching fails, randomly select local or X post)
+            if self.x_assets_service and random.random() < 0.6:  # bias towards X for fresh humiliation content
+                try:
+                    rand_x = await self.get_random_valid_x_media(user_id)
+                    if rand_x:
+                        p = Path(rand_x)
+                        if p.exists():
+                            if p.suffix.lower() in self.IMAGE_SUFFIXES:
+                                logger.info("No keyword match, randomly picked X post to humiliate user_id=%s", user_id)
+                                return self._bundle_from_payload({"images": [rand_x], "videos": []})
+                            else:
+                                logger.info("No keyword match, randomly picked X video post to humiliate user_id=%s", user_id)
+                                return self._bundle_from_payload({"images": [], "videos": [rand_x]})
+                except Exception:
+                    pass
 
             if self._should_use_random_fallback(
                 user_id=user_id,

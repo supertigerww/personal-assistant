@@ -65,7 +65,8 @@ class XAssetsService:
             return []
 
         # Build FTS match query (simple OR for the keywords)
-        match_terms = " OR ".join(f'"{kw}"' for kw in keywords if kw)
+        # Use unquoted for better recall on Chinese text (tokens), fallback to phrase if needed
+        match_terms = " OR ".join(kw for kw in keywords if kw)
         if not match_terms:
             match_terms = "*"
 
@@ -142,6 +143,21 @@ class XAssetsService:
             if valid_paths:
                 p["media_paths"] = valid_paths[:1]
                 results.append(p)
+
+        if not results:
+            logger.info("No matching X posts found via FTS for keywords=%s (after exists filter), falling back to random selection", keywords)
+            random_results = await self.get_random_humiliation_post(limit=limit)
+            if keywords and random_results:
+                # Try to keep some relevance: filter random posts that contain at least one keyword
+                filtered = []
+                for p in random_results:
+                    text_lower = (p.get("text") or "").lower()
+                    if any(kw.lower() in text_lower for kw in keywords if len(kw) > 1):
+                        filtered.append(p)
+                if filtered:
+                    return filtered[:limit]
+            return random_results
+
         logger.info("Fetched %s X humiliation posts for keywords=%s via FTS", len(results), keywords)
         return results
 
