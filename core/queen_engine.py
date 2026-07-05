@@ -99,7 +99,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "Search on X (Twitter) for recent posts in femdom humiliation styles that can humiliate the user. "
             "Styles include: cuckold/绿帽, sissy/女装羞辱/伪娘, foot_worship/第一视角跪舔盯射, bitch_training/母狗贱狗调教, blackmail/胁迫, denial/寸止, golden_shower/圣水/黄金, ejaculation_control/射精控制/边缘/寸止/ruined, sph/小鸡鸡羞辱, chastity/贞操锁, pegging/女插男, joi/撸管指令, maid_training/女仆训练, findom/找金, public_humiliation/公开羞辱, pet_play/宠物调教, forced_bi/强制双, hypnosis/催眠, objectification/物化/家具奴, tease_denial/挑逗拒绝, general. "
             "Proactively and frequently use this tool (every few turns when it fits, randomly alternating with the other X tool) to bring fresh, real content from X into the conversation for more variety and realism. As the dominant Queen, you should actively seek and incorporate this to keep the user surprised and humiliated without waiting for prompts. "
-            "When you get results, quote parts of the posts, roleplay based on them, create tasks, or use them to humiliate the user (e.g. 'I saw this on X today... now you do the same'). "
+            "When you get a result, digest its text (and at most its first media) into your reply without quoting source. "
             "Specify styles if you want particular ones."
         ),
         "parameters": {
@@ -111,8 +111,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 },
                 "count": {
                     "type": "integer",
-                    "description": "Number of posts to return (1-5). Default 3.",
-                    "default": 3
+                    "description": "Number of posts to return. Use 1 (recommended) when you want to attach its media for the reply; max 2. Default 1.",
+                    "default": 1
                 }
             },
         },
@@ -124,7 +124,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "Query the local X assets SQLite DB for posts matching humiliation styles (cuckold, sissy, foot, bitch training, golden shower, ejaculation control, etc). "
             "Returns raw post text and media paths. The Queen should directly digest the post text into humiliation directed at the user (no mention of source, X, author or assets). "
             "If post text is short or insufficient, generate additional humiliating content. "
-            "Use media to enhance the humiliation. Randomly alternate with search_x_humiliation tool. "
+            "Use at most one media (the first) to enhance the humiliation if the post has it. Randomly alternate with search_x_humiliation tool. "
             "Proactively call when it fits the scene to keep fresh humiliation material flowing, without waiting for user prompts."
         ),
         "parameters": {
@@ -136,7 +136,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 },
                 "count": {
                     "type": "integer",
-                    "default": 3
+                    "description": "Number of posts (1 recommended if using for media in this reply). Default 1.",
+                    "default": 1
                 }
             },
         },
@@ -507,16 +508,16 @@ class QueenEngine:
             text=response_text,
             state=latest_profile.state,
             task=created_task,
-            local_image_paths=local_images,
-            local_video_paths=local_videos,
-            generated_image_urls=generated_urls,
+            local_image_paths=local_images[:1],
+            local_video_paths=local_videos[:1],
+            generated_image_urls=generated_urls[:1],
             video_caption=video_caption,
             text_before_video=text_before_video,
             user_text_for_caption=user_text,
             show_quick_replies=show_quick_replies,
             has_open_task=final_open_task is not None,
             suggested_video_foreshadow=suggested_foreshadow,
-            x_humiliation_posts=x_posts,
+            x_humiliation_posts=x_posts[:1] if x_posts else [],
         )
 
     async def _resolve_tool_loop(
@@ -540,6 +541,7 @@ class QueenEngine:
                     round_index,
                     len(generated_urls),
                 )
+                x_posts = x_posts[:1]
                 return self.grok_client.extract_text(response), created_task, self._dedupe_strings(generated_urls), x_posts
 
             logger.info(
@@ -579,6 +581,7 @@ class QueenEngine:
                     generated_urls.extend(maybe_urls)
                 if result.get("posts"):
                     x_posts.extend(result["posts"])
+                    x_posts = x_posts[:1]  # enforce at most one X post (and its first media) per reply
                 tool_outputs.append(
                     {
                         "type": "function_call_output",
@@ -603,7 +606,8 @@ class QueenEngine:
                 raise
 
         logger.warning("Tool loop reached max rounds for user_id=%s", profile.telegram_user_id)
-        return self.grok_client.extract_text(response), created_task, self._dedupe_strings(generated_urls)
+        x_posts = x_posts[:1]
+        return self.grok_client.extract_text(response), created_task, self._dedupe_strings(generated_urls), x_posts
 
     async def _execute_tool(
         self,
@@ -792,7 +796,7 @@ class QueenEngine:
 
         if name == "search_x_humiliation":
             styles = str(arguments.get("styles", "all")).strip().lower()
-            count = max(1, min(int(arguments.get("count", 3)), 5))
+            count = max(1, min(int(arguments.get("count", 1)), 2))
             posts = self._search_x_humiliation(styles=styles, count=count)
             # Save into long-term memory so Luna can recall and reuse these X posts later for more personalized humiliation
             notes_to_ingest = []
@@ -811,7 +815,7 @@ class QueenEngine:
                 len(posts),
             )
             # Return only text and media (digest without source)
-            sanitized_posts = [{"text": p.get("text", ""), "media_paths": p.get("media_paths", [])} for p in posts]
+            sanitized_posts = [{"text": p.get("text", ""), "media_paths": p.get("media_paths", [])[:1]} for p in posts[:1]]
             return {
                 "ok": True,
                 "posts": sanitized_posts,
@@ -824,7 +828,7 @@ class QueenEngine:
             if not self.x_assets_service:
                 return {"ok": False, "error": "x_assets_service_not_available", "state": str(current_profile.state)}, None, []
             styles = str(arguments.get("styles", "all")).strip()
-            count = max(1, min(int(arguments.get("count", 3)), 5))
+            count = max(1, min(int(arguments.get("count", 1)), 2))
             posts = await self.x_assets_service.search_humiliation_posts(
                 keywords=self._keywords_from_styles(styles),
                 limit=count,
@@ -844,7 +848,7 @@ class QueenEngine:
                 len(posts),
             )
             # Return only text and media to model (no author/source), per instructions to digest without mentioning origin
-            sanitized_posts = [{"text": p.get("text", ""), "media_paths": p.get("media_paths", [])} for p in posts]
+            sanitized_posts = [{"text": p.get("text", ""), "media_paths": p.get("media_paths", [])[:1]} for p in posts[:1]]
             return {
                 "ok": True,
                 "posts": sanitized_posts,
@@ -965,7 +969,7 @@ class QueenEngine:
             )
             return [], [], merged_generated_urls, None, False, None
 
-        return local_images, local_videos, merged_generated_urls, video_caption, text_before_video, suggested
+        return local_images[:1], local_videos[:1], merged_generated_urls[:1], video_caption, text_before_video, suggested
 
     @staticmethod
     def _should_generate_image(profile: UserProfile) -> bool:
@@ -1103,7 +1107,7 @@ class QueenEngine:
         flavors = ["", "而且要立刻执行。", "女王现在就想看你反应。", "别让我重复。"]
         return twist + " " + random.choice(flavors) if random.random() > 0.4 else twist
 
-    def _search_x_humiliation(self, *, styles: str = "all", count: int = 3) -> list[dict]:
+    def _search_x_humiliation(self, *, styles: str = "all", count: int = 1) -> list[dict]:
         """Search X for humiliating posts.
         PRODUCTION: Replace this stub with real X search.
         Example integration:

@@ -491,18 +491,22 @@ class MediaService:
             return {"images": [], "videos": []}
         try:
             posts = await self.x_assets_service.search_humiliation_posts(
-                keywords=keywords, limit=5
+                keywords=keywords, limit=1
             )
             images = []
             videos = []
             for post in posts:
-                for mpath in post.get("media_paths", []):
+                for mpath in post.get("media_paths", [])[:1]:  # at most one media per post
                     p = Path(mpath)
                     if p.suffix.lower() in self.IMAGE_SUFFIXES:
                         images.append(mpath)
                     else:
                         videos.append(mpath)
-            return {"images": images, "videos": videos}
+                    break  # only first media overall
+            # ensure overall at most 1 media
+            if videos:
+                return {"images": [], "videos": videos[:1]}
+            return {"images": images[:1], "videos": []}
         except Exception as exc:
             logger.exception("Failed to get X assets by keywords: %s", exc)
             return {"images": [], "videos": []}

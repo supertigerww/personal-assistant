@@ -184,65 +184,30 @@ async def _reply_with_engine_result(
 
         chunks = split_reply_text(text_to_use)
         for index, chunk in enumerate(chunks):
-            has_followup_media = bool(
-                result.local_image_paths or result.generated_image_urls or result.local_video_paths or getattr(result, "x_humiliation_posts", None)
-            )
-            markup = keyboard if index == len(chunks) - 1 and not has_followup_media else None
-            await message.answer(chunk, reply_markup=markup)
+            # keyboard goes on the video (the single media), not text
+            await message.answer(chunk, reply_markup=None)
 
-        for image_path in result.local_image_paths:
-            await _send_single_media(
-                message,
-                (_detect_media_kind(image_path, default="photo"), image_path, True),
-            )
-        for image_source in result.generated_image_urls:
-            await _send_single_media(
-                message,
-                (
-                    _detect_media_kind(image_source, default="photo"),
-                    image_source,
-                    not _is_remote_source(image_source),
-                ),
-            )
-        for video_path in result.local_video_paths:
-            await _send_single_media(
-                message,
-                (_detect_media_kind(video_path, default="video"), video_path, True),
-                caption=video_caption,
-                reply_markup=keyboard if video_path == result.local_video_paths[-1] else None,
-            )
-
-        # Send media from X posts (local DB or search) to enhance humiliation.
-        # Text is already digested into the main response by the Queen (no source mentions).
-        if getattr(result, "x_humiliation_posts", None):
-            x_posts = list(result.x_humiliation_posts)
-            random.shuffle(x_posts)  # ensure random order, not first folder/file
-            for post in x_posts:
-                for mpath in post.get("media_paths", []):
-                    # Normalize path in case DB stored with extra prefix
-                    cleaned = mpath
-                    for bad in ["app/images/", "images/", "app/assets/images/", "assets/images/"]:
-                        if cleaned.startswith(bad):
-                            cleaned = cleaned[len(bad):]
-                            break
-                    if not cleaned.startswith("/"):
-                        cleaned = str(Path("/app/assets/x_assets") / cleaned.lstrip("/"))
-                    kind = _detect_media_kind(cleaned, default="photo")
-                    try:
-                        await _send_single_media(
-                            message,
-                            (kind, cleaned, True),
-                        )
-                    except Exception as e:
-                        logger.warning("Failed to send X media %s: %s", cleaned, e)
+        # Enforce exactly ONE media: only the first video
+        video_path = result.local_video_paths[0]
+        await _send_single_media(
+            message,
+            (_detect_media_kind(video_path, default="video"), video_path, True),
+            caption=video_caption,
+            reply_markup=keyboard,
+        )
         return
 
-    # Also send X media in the general media sequence case
+    # Normal (non-video) path: select and send AT MOST ONE media total.
+    # X humiliation media takes priority (for fresh content).
+    media_to_send: MediaItem | None = None
     if getattr(result, "x_humiliation_posts", None):
         x_posts = list(result.x_humiliation_posts)
-        random.shuffle(x_posts)  # randomize to not start from first subfolder/file
+        random.shuffle(x_posts)  # random, never first subfolder/file
         for post in x_posts:
-            for mpath in post.get("media_paths", []):
+            mpaths = post.get("media_paths", []) or []
+            if mpaths:
+                mpath = mpaths[0]  # exactly one media per reply
+                # Normalize path
                 cleaned = mpath
                 for bad in ["app/images/", "images/", "app/assets/images/", "assets/images/"]:
                     if cleaned.startswith(bad):
@@ -251,48 +216,37 @@ async def _reply_with_engine_result(
                 if not cleaned.startswith("/"):
                     cleaned = str(Path("/app/assets/x_assets") / cleaned.lstrip("/"))
                 kind = _detect_media_kind(cleaned, default="photo")
-                try:
-                    await _send_single_media(
-                        message,
-                        (kind, cleaned, True),
-                    )
-                except Exception as e:
-                    logger.warning("Failed to send X media %s: %s", cleaned, e)
+                media_to_send = (kind, cleaned, True)
+                break
 
-    media_items = _build_media_items(result)
-    if media_items:
-        await _send_media_sequence(message, media_items, caption=result.text, reply_markup=keyboard)
+    if media_to_send is None:
+        media_items = _build_media_items(result)
+        if media_items:
+            media_to_send = media_items[0]  # at most one
+
+    if media_to_send:
+        # send text chunks without keyboard (keyboard goes on the media)
+        chunks = split_reply_text(result.text)
+        for chunk in chunks:
+            await message.answer(chunk, reply_markup=None)
+        cap = video_caption if media_to_send and media_to_send[0] == "video" else None
+        await _send_single_media(
+            message,
+            media_to_send,
+            caption=cap,
+            reply_markup=keyboard,
+        )
         return
 
+    # Pure text reply
     chunks = split_reply_text(result.text)
     for index, chunk in enumerate(chunks):
         markup = keyboard if index == len(chunks) - 1 else None
         await message.answer(chunk, reply_markup=markup)
 
-    # Fallback: send any X media if not sent in other branches
-    if getattr(result, "x_humiliation_posts", None):
-        x_posts = list(result.x_humiliation_posts)
-        random.shuffle(x_posts)  # ensure random order, not first subfolder/file
-        for post in x_posts:
-            for mpath in post.get("media_paths", []):
-                cleaned = mpath
-                for bad in ["app/images/", "images/", "app/assets/images/", "assets/images/"]:
-                    if cleaned.startswith(bad):
-                        cleaned = cleaned[len(bad):]
-                        break
-                if not cleaned.startswith("/"):
-                    cleaned = str(Path("/app/assets/x_assets") / cleaned.lstrip("/"))
-                kind = _detect_media_kind(cleaned, default="photo")
-                try:
-                    await _send_single_media(
-                        message,
-                        (kind, cleaned, True),
-                    )
-                except Exception as e:
-                    logger.warning("Failed to send X media %s: %s", cleaned, e)
-
 
 def _build_media_items(result: EngineResult) -> list[MediaItem]:
+    """Collect media but callers must ensure at most one is used per reply."""
     items: list[MediaItem] = []
 
     for image_path in result.local_image_paths:
@@ -310,7 +264,7 @@ def _build_media_items(result: EngineResult) -> list[MediaItem]:
             )
         )
 
-    return items
+    return items  # caller in _reply_with_engine_result is responsible for using at most the first item
 
 
 async def _send_media_sequence(
@@ -320,19 +274,19 @@ async def _send_media_sequence(
     caption: str,
     reply_markup=None,
 ) -> None:
-    first_item, *remaining_items = media_items
+    if not media_items:
+        await message.answer(caption, reply_markup=reply_markup)
+        return
+    # Strictly one media per response: ignore any extras
+    first_item = media_items[0]
     first_sent = await _send_single_media(
         message,
         first_item,
         caption=caption,
-        reply_markup=reply_markup if not remaining_items else None,
+        reply_markup=reply_markup,
     )
     if not first_sent:
         await message.answer(caption, reply_markup=reply_markup)
-        return
-
-    for item in remaining_items:
-        await _send_single_media(message, item)
 
 
 async def _send_single_media(

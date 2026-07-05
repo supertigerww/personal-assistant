@@ -50,7 +50,7 @@ class XAssetsService:
     async def search_humiliation_posts(
         self,
         keywords: list[str],
-        limit: int = 5,
+        limit: int = 1,
         styles: str | None = None,
     ) -> list[dict[str, Any]]:
         """Search using media_search_fts for relevance, then join to posts + media.
@@ -120,7 +120,11 @@ class XAssetsService:
                 full_path = self._build_full_media_path(local_path)
                 posts_dict[tweet_id]["media_paths"].append(full_path)
 
-        results = list(posts_dict.values())[:limit]
+        results = []
+        for p in list(posts_dict.values())[:limit]:
+            if p.get("media_paths"):
+                p["media_paths"] = p["media_paths"][:1]
+            results.append(p)
         logger.info("Fetched %s X humiliation posts for keywords=%s via FTS", len(results), keywords)
         return results
 
@@ -165,7 +169,11 @@ class XAssetsService:
                 full_path = self._build_full_media_path(local_path)
                 posts_dict[tweet_id]["media_paths"].append(full_path)
 
-        results = list(posts_dict.values())[:limit]
+        results = []
+        for p in list(posts_dict.values())[:limit]:
+            if p.get("media_paths"):
+                p["media_paths"] = p["media_paths"][:1]
+            results.append(p)
         return results
 
     def _build_full_media_path(self, local_path: str) -> str:
