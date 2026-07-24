@@ -37,7 +37,7 @@ class ContextBuilder:
         "声音再惨点",
         "屁股撅高",
         "继续发料",
-        # Sticky JOI loop — ban when already used recently
+        # Sticky JOI / confession loops
         "对着屏幕",
         "毁掉快感",
         "毁掉每一次快感",
@@ -48,22 +48,32 @@ class ContextBuilder:
         "先给我老实坦白",
         "盯着我的黑丝",
         "继续握着",
+        "讲清楚",
+        "原话讲",
+        "详细说给我听",
+        "说给我听",
+        "在脑子里",
+        "画面原话",
+        "只准看不准碰",
+        "手先停",
+        "停手",
+        "慢下来",
     )
 
-    # Rotating play axes injected into runtime so the model does not park on JOI-only.
+    # Rotating play axes — prefer COMMANDS / teasing over "make user write essays".
     PLAY_AXIS_HINTS = (
-        "foot_worship: 脚/鞋/丝足，命令盯着、描述、幻想侍奉，少提撸管",
-        "service_oral_fantasy: 侍奉/口舌顺序口述，要求复述细节",
-        "posture_training: 跪姿/狗爬/不许动，用姿势与汇报加压",
-        "denial_ruined: 边缘/ruined/强制停手，但换一套口令不要复读旧句",
-        "identity_degrade: 新贱称+短自白/检讨，再给一个服从动作",
-        "compare_humiliation: 对比正常男人/差距清单，逼坦白",
-        "nipple_tease: 乳头玩弄指令与羞耻汇报",
-        "outfit_control: 黑丝/手套/项圈等穿戴细节与触感描述",
-        "ignore_deny_touch: 冷落、禁止碰自己，只准回答问题",
-        "public_fantasy: 被听见/被看见的公开羞辱幻想一小段",
-        "cuck_spectate: 旁观/绿帽幻想一个画面点，不要堆标签",
-        "joi_variant: 若必须 JOI，换节奏/姿势/停手规则，禁止同一套「盯屏幕毁掉快感」",
+        "foot_command: 足控——你下令盯脚/闻鞋/跪姿，用你自己的羞辱叙述加压，少逼他写作文",
+        "service_tease: 侍奉戏弄——你口述他该怎么舔/服侍，夹嘲讽，直接给动作不要连环提问",
+        "allow_stroke_edge: 允许慢撸/按节奏边缘，夹脏话羞辱，不是全程停手",
+        "ruined_tease: 快到边缘时突然改规则（慢/停/只准蹭），用戏弄口吻，不是审讯",
+        "identity_insult: 强制贱称+你单方面骂到位，再给一个短动作命令",
+        "compare_mock: 对比正常男人/女奴男友，你直接嘲讽判决，少问他问题",
+        "nipple_order: 乳头/身体玩弄的直接指令+羞辱",
+        "outfit_tease: 黑丝/手套/高跟细节，你描述并命令他盯着硬",
+        "cuck_scene_push: 你主动讲一小段绿帽/旁观画面并下令他怎么跪着听，禁止让他填空写作",
+        "posture_snap: 突然换姿势（跪/撅/手背后）并立刻接下一句侮辱",
+        "reward_stroke: 因听话短暂允许多撸几下当赏赐，同时骂他下贱",
+        "public_mock: 公开/被听见幻想一句+命令，不要问卷",
     )
 
     def __init__(self, settings: Any) -> None:
@@ -302,11 +312,23 @@ class ContextBuilder:
         )
 
         joi_loop = ContextBuilder._detect_joi_loop(recent_assistant)
-        joi_line = (
-            "- JOI-loop detected in recent replies (盯屏幕/握紧/毁掉快感 同类)。本轮禁止再写同一套路，必须换玩法轴。\n"
-            if joi_loop
-            else ""
-        )
+        confession_loop = ContextBuilder._detect_confession_loop(recent_assistant)
+        denial_loop = ContextBuilder._detect_denial_only_loop(recent_assistant)
+        loop_lines = ""
+        if joi_loop:
+            loop_lines += (
+                "- JOI-loop detected（盯屏幕/握紧/毁掉快感）。本轮禁止同一套路，必须换玩法轴。\n"
+            )
+        if confession_loop:
+            loop_lines += (
+                "- Confession-loop detected（讲清楚/原话/脑子里画面/详细说给我听）。"
+                "本轮禁止再逼用户写作文式幻想；改为你下命令+戏弄羞辱，最多一句短确认。\n"
+            )
+        if denial_loop:
+            loop_lines += (
+                "- Denial-only loop detected（停手/不准碰连续出现）。"
+                "本轮必须允许碰/慢撸/按节奏至少一种，用戏弄而不是纯禁止。\n"
+            )
 
         return (
             "Anti-template (MUST obey this turn):\n"
@@ -314,13 +336,15 @@ class ContextBuilder:
             f"- Do NOT start this reply with any of: {openings_text}\n"
             f"- Do NOT end this reply with any of: {endings_text}\n"
             f"- Avoid reusing these high-frequency phrases this turn: {overused_text}\n"
-            f"{joi_line}"
+            f"{loop_lines}"
             "- Max 1-2 fetish themes this turn. No hashtag-list / keyword-collage style.\n"
             "- React to the user's latest message first, then dominate. Never ignore what they just said.\n"
             "- If the user asked for feet/service/oral fantasy/nipples/etc., follow THAT beat; do not yank them back to screen-staring JOI.\n"
+            "- Prefer imperative commands over questions. At most one question this turn; zero is better. End on an order or insult, not an interview.\n"
+            "- 本轮结尾优先：直接命令/任务/羞辱判决。禁止连续用「讲清楚？」「是什么姿势？」收尾。\n"
             f"- Style hint for this turn: {style_hint}\n"
             "- If recent assistant replies felt copy-pasted, call roll_random_twist once, then write a fresh angle.\n"
-            "- 禁止固定首尾：不要再「跪好，废物贱狗…」开头，不要用「——继续，别停」或「对着屏幕毁掉快感」当公式收尾。\n"
+            "- 禁止固定首尾：不要「跪好，废物贱狗…」开头；不要「——继续，别停」或审讯式提问收尾。\n"
         )
 
     @staticmethod
@@ -345,6 +369,53 @@ class ContextBuilder:
         return hits >= 2
 
     @staticmethod
+    def _detect_confession_loop(recent_assistant: list[str]) -> bool:
+        """User forced to narrate fantasies every turn."""
+        if len(recent_assistant) < 2:
+            return False
+        markers = (
+            "讲清楚",
+            "原话",
+            "详细说",
+            "说给我听",
+            "在脑子里",
+            "画面",
+            "描述",
+            "告诉我",
+            "是什么姿势",
+            "怎么想",
+            "幻想",
+        )
+        hits = 0
+        for reply in recent_assistant[-3:]:
+            # Heavy question + confession demand
+            qmarks = reply.count("？") + reply.count("?")
+            if any(marker in reply for marker in markers) or qmarks >= 2:
+                hits += 1
+        return hits >= 2
+
+    @staticmethod
+    def _detect_denial_only_loop(recent_assistant: list[str]) -> bool:
+        if len(recent_assistant) < 2:
+            return False
+        markers = (
+            "停手",
+            "不准碰",
+            "不许碰",
+            "只准看",
+            "手拿开",
+            "手先停",
+            "不许动",
+            "不准射",
+            "不许射",
+        )
+        hits = 0
+        for reply in recent_assistant[-3:]:
+            if any(marker in reply for marker in markers):
+                hits += 1
+        return hits >= 2
+
+    @staticmethod
     def _play_axis_guidance(
         *,
         profile: UserProfile,
@@ -352,38 +423,59 @@ class ContextBuilder:
         recent_messages: list[dict[str, Any]],
     ) -> str:
         text = (user_text or "").strip()
-        # User-steered axes take priority so the model does not ignore pivots.
-        if any(k in text for k in ("脚", "脚底", "脚趾", "鞋", "丝足", "美腿")):
-            forced = "foot_worship: 用户提到脚/腿——本轮主轴必须是足控/腿/鞋，禁止拧回纯屏幕 JOI"
-        elif any(k in text for k in ("口交", "舔", "侍奉", "舌头", "含")):
-            forced = "service_oral_fantasy: 用户提到侍奉/口舌——沿这条幻想推进，要求细节复述"
-        elif any(k in text for k in ("乳", "奶", "乳头")):
-            forced = "nipple_tease: 用户提到乳头/胸——本轮做乳头玩弄与羞耻汇报"
-        elif any(k in text for k in ("绿帽", "别人", "旁观", "cuck", "NTR", "ntr")):
-            forced = "cuck_spectate: 用户提到旁观/绿帽——推进一个具体旁观画面"
-        elif any(k in text for k in ("女装", "伪娘", "裙子", "丝袜装")):
-            forced = "outfit_control: 用户提到女装/着装——做穿戴控制与触感描述"
-        else:
-            idx = int(getattr(profile, "conversation_count", 0) or 0) % len(ContextBuilder.PLAY_AXIS_HINTS)
-            forced = ContextBuilder.PLAY_AXIS_HINTS[idx]
-
         assistant_replies = [
             str(item.get("content") or "")
             for item in recent_messages
             if item.get("role") == "assistant"
-        ]
-        must_rotate = ContextBuilder._detect_joi_loop(assistant_replies[-3:])
-        rotate_line = (
-            "- Recent replies were JOI-monotone. MUST rotate to the recommended axis (or roll_random_twist) this turn.\n"
-            if must_rotate
-            else "- Even if the user is compliant, proactively weave the recommended axis in naturally — do not wait for them to beg for variety.\n"
+        ][-3:]
+        confession_loop = ContextBuilder._detect_confession_loop(assistant_replies)
+        denial_loop = ContextBuilder._detect_denial_only_loop(assistant_replies)
+        joi_loop = ContextBuilder._detect_joi_loop(assistant_replies)
+
+        # User-steered axes take priority so the model does not ignore pivots.
+        if any(k in text for k in ("脚", "脚底", "脚趾", "鞋", "丝足", "美腿")):
+            forced = "foot_command: 用户提脚——足控命令+你方羞辱叙述，禁止拧回审讯作文"
+        elif any(k in text for k in ("口交", "舔", "侍奉", "舌头", "含", "交合")):
+            forced = "service_tease: 用户提侍奉/交合——你口述画面并下令，允许或边缘撸，少提问"
+        elif any(k in text for k in ("乳", "奶", "乳头")):
+            forced = "nipple_order: 用户提乳头——直接玩弄指令+羞辱"
+        elif any(k in text for k in ("绿帽", "别人", "旁观", "女奴", "cuck", "NTR", "ntr")):
+            forced = "cuck_scene_push: 用户提绿帽/女奴——你推进旁观画面+命令，不要让他填空"
+        elif any(k in text for k in ("女装", "伪娘", "裙子", "丝袜装")):
+            forced = "outfit_tease: 用户提女装——穿戴戏弄+命令"
+        elif any(k in text for k in ("太舒服", "不想停", "硬到", "想射", "继续撸", "想碰")):
+            forced = "allow_stroke_edge: 用户求继续/太爽——先允许慢撸或边缘戏弄，再突然收紧，禁止纯停手审讯"
+        elif confession_loop:
+            forced = "reward_stroke: 刚连续逼描述——本轮改成赏赐式慢撸+侮辱，禁止再要长段幻想作文"
+        elif denial_loop:
+            forced = "allow_stroke_edge: 刚连续停手——本轮必须给撸/节奏命令"
+        elif joi_loop:
+            forced = "cuck_scene_push: JOI 复读——切换绿帽/旁观画面命令或足控"
+        else:
+            idx = int(getattr(profile, "conversation_count", 0) or 0) % len(ContextBuilder.PLAY_AXIS_HINTS)
+            forced = ContextBuilder.PLAY_AXIS_HINTS[idx]
+
+        must_rotate = confession_loop or denial_loop or joi_loop or (
+            int(getattr(profile, "conversation_count", 0) or 0) % 3 == 0
         )
+        if must_rotate:
+            rotate_line = (
+                "- MUST proactively switch/advance play this turn (user should not need to ask for 换花样). "
+                "Use recommended_play_axis or roll_random_twist / search_sm_play_ideas.\n"
+                "- 本轮必须主动换打法或加码，不要等用户提醒。\n"
+            )
+        else:
+            rotate_line = (
+                "- Proactively drive the scene; do not wait for the user to request variety.\n"
+                "- 主动推进；用命令而不是提问推进。\n"
+            )
         return (
             "Play variety (MUST obey this turn):\n"
             f"- recommended_play_axis: {forced}\n"
             f"{rotate_line}"
-            "- Keep 1 main axis (+ optional light secondary). Spoken Chinese, not a fetish menu.\n"
-            "- 本轮按 recommended_play_axis 主动加一种调教玩法，自然写进命令/幻想，不要列清单。\n"
+            "- Keep 1 main axis. Spoken Chinese. Prefer teasing insults + direct orders over questionnaires.\n"
+            "- 本轮：直接给指示/即时任务；你自己把羞辱画面讲出来；少逼用户描述。\n"
+            "- Allow stroking/edging on some turns — denial is a tool, not the only mode.\n"
         )
 
     @staticmethod
@@ -635,27 +727,27 @@ class ContextBuilder:
     def _style_hint_for_turn(*, conversation_fingerprint: int, length_mode: str) -> str:
         short_styles = (
             "cold mock of the user's latest reaction only",
-            "one sharp command + stop",
-            "deny/reward framing in two sentences",
-            "sudden focus shift to one body detail",
-            "ban touch, force a one-line confession",
-            "pivot to feet/legs with one cruel line",
+            "one sharp command, zero questions",
+            "allow slow strokes for two sentences of teasing",
+            "sudden focus shift to feet/legs with one cruel order",
+            "one degrading nickname + one physical order",
+            "reward a few strokes then snatch control back",
         )
         medium_styles = (
-            "react first, then one new order",
+            "react first, then one new order — no interview",
             "upgrade last beat without repeating wording",
-            "quiet contempt instead of loud insults",
-            "force a short confession about what just happened",
-            "service fantasy beat: dictate tongue/order of worship",
-            "posture drill instead of stroke commands",
+            "quiet contempt + allow edging rhythm",
+            "you narrate the dirty scene; he only obeys",
+            "service tease: dictate worship, mock him while he strokes",
+            "posture snap then insult, no questions",
         )
         long_styles = (
-            "scene push with one fetish theme only",
-            "memory callback + new pressure",
-            "ritual-like instruction without keyword dump",
-            "contrast humiliation with concrete sensory detail",
-            "outfit/control detail then a single degrading ritual",
-            "public-fantasy pressure without keyword dump",
+            "scene push with one fetish theme, commands not questions",
+            "memory callback + new teasing pressure",
+            "you describe cuck/foot/service detail; he follows orders",
+            "contrast humiliation with concrete sensory mockery",
+            "outfit tease then a degrading action order",
+            "public-fantasy mockery closed with a command",
         )
         pool = short_styles if length_mode == "short" else medium_styles if length_mode == "medium" else long_styles
         return pool[conversation_fingerprint % len(pool)]
