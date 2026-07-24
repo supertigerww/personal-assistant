@@ -72,16 +72,17 @@ class Settings(BaseSettings):
     assets_videos_path: str = "assets/videos"
     generated_images_path: str = "data/generated_images"
     max_local_video_size_mb: int = 45
-    media_send_probability_normal: float = 0.50
-    media_send_probability_intense: float = 0.70
+    # Probability of attaching *local/X library* media on a soft match turn.
+    media_send_probability_normal: float = 0.40
+    media_send_probability_intense: float = 0.55
     media_send_probability_aftercare: float = 0.0
     media_send_probability_paused: float = 0.0
     media_random_fallback_probability: float = 0.25
     media_max_items_per_message: int = 1
-    # Soft auto scene-image generation when conversation has visual/play beats
-    # (special markers / explicit image asks still always try when allowed).
-    scene_image_auto_probability_normal: float = 0.42
-    scene_image_auto_probability_intense: float = 0.60
+    # Soft auto *AI scene generation* only after local/X did not attach.
+    # Aligned with media_send so gen and library feel similarly frequent when both can fire.
+    scene_image_auto_probability_normal: float = 0.40
+    scene_image_auto_probability_intense: float = 0.55
     luna_visual_prompt_path: str = "prompts/luna_visual.txt"
     media_repeat_cooldown_hours: int = 48
     media_repeat_penalty_score: int = 24

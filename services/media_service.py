@@ -130,15 +130,13 @@ class MediaService:
         "scene",
         "shot",
     )
-    # Fetish / body / prop cues that make a generated still useful even without
-    # explicit "特写/构图" markers — used for soft auto generation.
+    # Stronger visual cues only — avoid ultra-common chat words like 看着/盯着/屏幕
+    # that appear in almost every Queen reply and would starve local assets.
     VISUAL_PLAY_MARKERS = (
         "黑丝",
         "丝袜",
         "丝足",
         "美腿",
-        "腿",
-        "脚",
         "脚底",
         "脚趾",
         "高跟鞋",
@@ -147,35 +145,17 @@ class MediaService:
         "皮裙",
         "手套",
         "项圈",
-        "鞭",
-        "跪",
-        "坐",
         "俯视",
-        "踩",
-        "鞋",
-        "舌头",
-        "嘴唇",
-        "乳",
-        "胸",
-        "屁股",
-        "腰",
+        "特写",
         "全身",
         "半身",
         "形象",
         "样子",
-        "看着",
-        "盯着",
-        "屏幕",
         "latex",
         "heels",
         "pantyhose",
         "stockings",
-        "feet",
-        "foot",
-        "legs",
         "corset",
-        "gloves",
-        "collar",
     )
 
     def __init__(
@@ -473,59 +453,18 @@ class MediaService:
                 logger.info("Using local image for explicit image request user_id=%s", user_id)
                 return self._bundle_from_payload(image_payload)
 
-            # Keyword-matched X assets take priority for relevant context
-            x_images = x_payload.get("images", [])
-            x_videos = x_payload.get("videos", [])
-            if should_attach_video and x_videos:
-                logger.info("Using keyword-matched X video for user_id=%s", user_id)
-                return self._bundle_from_payload({"images": [], "videos": x_videos[:1]}, text_before_video=True)
-            if x_images or x_videos:
-                # Prefer scene generation over X stills when the model/heuristic wants a
-                # custom visual beat — keeps generated images from being starved by X matches.
-                prefer_generation_over_x = bool(should_generate or is_queen_visual) and not should_attach_video
-                if should_attach_video and x_videos and not prefer_generation_over_x:
-                    logger.info("Using X video (keyword or random fallback) for user_id=%s", user_id)
-                    return self._bundle_from_payload({"images": [], "videos": x_videos[:1]}, text_before_video=True)
-                if x_images and not prefer_generation_over_x:
-                    logger.info("Using X image (keyword or random fallback when no match) for user_id=%s", user_id)
-                    return self._bundle_from_payload({"images": x_images[:1], "videos": []})
+            # Queen portrait / explicit "生成形象" always wins over local stock.
+            if is_queen_visual:
+                generated = await self._try_generate_scene_bundle(
+                    user_text=user_text,
+                    media_context=media_context,
+                    user_id=user_id,
+                    is_queen_visual=True,
+                )
+                if generated is not None:
+                    return generated
 
-            if should_generate or is_queen_visual:
-                try:
-                    # Base the image generation prompt primarily on the *current user request*
-                    # so that heavy keywords from previous context don't pollute the prompt sent to the image model.
-                    gen_prompt = (user_text or "").strip() or media_context
-                    reason = "scene_decision"
-                    if is_queen_visual:
-                        # Use clean prompt focused on the Queen's appearance only
-                        gen_prompt = (
-                            "the dominant Queen, photorealistic East Asian woman late 20s to early 30s, "
-                            "oval soft-elegant face, large almond eyes, confident cold gaze, "
-                            "full rosy lips, long voluminous wavy black hair, "
-                            "shiny black latex corset, black leather short skirt, sheer black pantyhose, "
-                            "long black gloves, pointed black stiletto heels with glossy red soles, "
-                            "full body portrait"
-                        )
-                        reason = "queen_visual_request"
-                    images = await self.generate_scene_image(
-                        prompt=gen_prompt,
-                        add_humiliation_text=not is_queen_visual,
-                    )
-                    if images:
-                        logger.info(
-                            "Generated supplemental images for user_id=%s reason=%s",
-                            user_id,
-                            reason,
-                        )
-                        compact = self._compact_payload(images=images, videos=[], prefer_random=False)
-                        return self._bundle_from_payload(compact)
-                except Exception as exc:
-                    logger.exception(
-                        "Failed to generate supplemental image for user_id=%s: %s",
-                        user_id,
-                        exc,
-                    )
-
+            # Local / X first so soft auto-generation does not starve the library.
             if strong_image_match:
                 if self._should_attach_media(
                     context=media_context,
@@ -539,9 +478,35 @@ class MediaService:
                         outcome.best_score,
                     )
                     return self._bundle_from_payload(image_payload)
-
                 logger.info("Skipped strong local image for user_id=%s after probability gate.", user_id)
-                return empty
+                # Fall through: may still generate or random-attach below.
+
+            x_images = x_payload.get("images", [])
+            x_videos = x_payload.get("videos", [])
+            if should_attach_video and x_videos:
+                logger.info("Using keyword-matched X video for user_id=%s", user_id)
+                return self._bundle_from_payload({"images": [], "videos": x_videos[:1]}, text_before_video=True)
+            if x_images:
+                # X stills only when local didn't attach; soft generation can still run after.
+                if self._should_attach_media(
+                    context=media_context,
+                    user_id=user_id,
+                    profile=profile,
+                    outcome=outcome,
+                ):
+                    logger.info("Using X image for user_id=%s", user_id)
+                    return self._bundle_from_payload({"images": x_images[:1], "videos": []})
+
+            # Soft/auto generation only when no local/X image was chosen.
+            if should_generate:
+                generated = await self._try_generate_scene_bundle(
+                    user_text=user_text,
+                    media_context=media_context,
+                    user_id=user_id,
+                    is_queen_visual=False,
+                )
+                if generated is not None:
+                    return generated
 
             if has_explicit_image_request:
                 fallback = await self.get_random_assets(image_count=1, video_count=0, user_id=user_id)
@@ -1101,6 +1066,47 @@ class MediaService:
             result = result.replace(bad.capitalize(), safe)
         return result
 
+    async def _try_generate_scene_bundle(
+        self,
+        *,
+        user_text: str,
+        media_context: str,
+        user_id: int,
+        is_queen_visual: bool,
+    ) -> MediaBundle | None:
+        try:
+            gen_prompt = (user_text or "").strip() or media_context
+            reason = "scene_decision"
+            if is_queen_visual:
+                gen_prompt = (
+                    "the dominant Queen, photorealistic East Asian woman late 20s to early 30s, "
+                    "oval soft-elegant face, large almond eyes, confident cold gaze, "
+                    "full rosy lips, long voluminous wavy black hair, "
+                    "shiny black latex corset, black leather short skirt, sheer black pantyhose, "
+                    "long black gloves, pointed black stiletto heels with glossy red soles, "
+                    "full body portrait"
+                )
+                reason = "queen_visual_request"
+            images = await self.generate_scene_image(
+                prompt=gen_prompt,
+                add_humiliation_text=not is_queen_visual,
+            )
+            if images:
+                logger.info(
+                    "Generated supplemental images for user_id=%s reason=%s",
+                    user_id,
+                    reason,
+                )
+                compact = self._compact_payload(images=images, videos=[], prefer_random=False)
+                return self._bundle_from_payload(compact)
+        except Exception as exc:
+            logger.exception(
+                "Failed to generate supplemental image for user_id=%s: %s",
+                user_id,
+                exc,
+            )
+        return None
+
     async def _should_generate(
         self,
         context: str,
@@ -1123,8 +1129,7 @@ class MediaService:
         if not normalized and not (soft_context or "").strip():
             return False
 
-        # Lowered sensitivity: if too heavy, skip generation and use local media instead
-        # Exception: allow if user specifically requested the Queen's image/appearance
+        # Heavy content → skip generation, prefer local assets
         is_queen_visual = self._is_queen_visual_request(context) or self._is_queen_visual_request(soft_context or "")
         if self._is_too_explicit_for_image_generation(context) and not is_queen_visual:
             logger.info(
@@ -1136,6 +1141,7 @@ class MediaService:
             logger.info("Queen visual requested — allowing image generation for user_id=%s.", user_id)
             return True
 
+        # Hard path: explicit composition markers or user asked for a picture → always try.
         if self._has_special_scene_marker(normalized):
             logger.debug("Image generation enabled by visual scene marker for user_id=%s.", user_id)
             return True
@@ -1144,13 +1150,12 @@ class MediaService:
             logger.debug("Image generation enabled by explicit media request for user_id=%s.", user_id)
             return True
 
-        # Soft path: visual fetish / body / prop cues in user text OR assistant beat.
-        # Generic short chat without visual beats must not auto-generate.
-        soft_blob = " ".join(part for part in (context, soft_context or "") if part and part.strip())
-        has_visual_play = self._has_visual_play_marker(soft_blob)
-        context_terms = self._extract_context_terms(soft_blob or context)
+        # Soft path: only *user* text with strong outfit/pose cues (not full assistant reply —
+        # otherwise "盯着屏幕" every turn forces generation and starves local media).
+        has_visual_play = self._has_visual_play_marker(context)
+        context_terms = self._extract_context_terms(context)
         descriptive_terms = [term for term in context_terms if len(term) >= 3]
-        soft_scene = has_visual_play or (len(descriptive_terms) >= 2 and len(soft_blob) >= 16)
+        soft_scene = has_visual_play or (len(descriptive_terms) >= 2 and len(normalized) >= 18)
         if not soft_scene:
             logger.debug(
                 "Image generation skipped (no soft visual cue) user_id=%s terms=%s",
@@ -1183,10 +1188,10 @@ class MediaService:
         state = getattr(profile, "state", ConversationState.NORMAL)
         if state == ConversationState.INTENSE:
             return self._clamp_probability(
-                getattr(self.settings, "scene_image_auto_probability_intense", 0.60)
+                getattr(self.settings, "scene_image_auto_probability_intense", 0.55)
             )
         return self._clamp_probability(
-            getattr(self.settings, "scene_image_auto_probability_normal", 0.42)
+            getattr(self.settings, "scene_image_auto_probability_normal", 0.40)
         )
 
     def _should_attach_media(

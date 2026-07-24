@@ -69,10 +69,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "name": "generate_scene_image",
         "description": (
-            "Generate a supplemental scene image fairly often when a visual beat would hit harder — "
-            "outfit focus (黑丝/heels/latex), body detail (legs/feet/chest), posture (kneel/sit/step on), "
-            "or when you want the user staring at you while you give a new order. "
-            "Prefer calling this every few turns with a fresh pose/angle rather than only once per session. "
+            "Generate a supplemental scene image when a *specific* visual beat helps — "
+            "outfit focus (黑丝/heels/latex), body detail (legs/feet), posture change, or user asks to see you. "
+            "Do NOT call every turn; roughly every few visual beats is enough. Prefer local library when the system already attaches media. "
             "NEVER use for extremely graphic, scatological, bodily-fluid-heavy or highly degrading scenes — these will be automatically intercepted to avoid content moderation rejection. "
             "Keep image prompts artistic and visual rather than explicit. "
             "Describe the SCENE and pose — do NOT paste the user's full chat message into the prompt. "

@@ -237,7 +237,7 @@ class ContextBuilder:
             f"{task_followup_guidance}"
             "- Use recalled_long_term_memories naturally. Never claim ignorance of facts listed there.\n"
             "- When user expresses dislike ('不喜欢', '讨厌', '不要'), immediately record it using update_user_profile.\n"
-            "- Media usage: Prefer local assets when they fit; call generate_scene_image often for pose/outfit/feet/black-stockings visual beats (about every 2-4 turns with a visual hook). Never call it for extremely graphic, scat, fluid-heavy, or ultra-degrading content — such requests are automatically intercepted before hitting xAI moderation.\n- NEVER write text claiming you 'generated', '为你生成', '生成女王的形象', or '我生成了' any image or the Queen's visual. If an image is attached by the system, just guide the user to look at it directly (e.g. '看着这张……'). If no image is attached, do not mention generation or image creation at all.\n- Special rule for Queen's image: If user asks '生成形象', '女王的样子', '你的形象' etc., you MUST call generate_scene_image with a CLEAN prompt focused ONLY on the Queen's appearance (use the visual description). This bypasses heavy content blocks so you can show your look even during explicit play.\n"
+            "- Media usage: Prefer local/X library; call generate_scene_image only for a specific pose/outfit beat or when the user asks to see you — not every turn. Always write a full spoken reply; never replace dialogue with an image-only turn. Never call it for extremely graphic, scat, fluid-heavy, or ultra-degrading content — such requests are automatically intercepted before hitting xAI moderation.\n- NEVER write text claiming you 'generated', '为你生成', '生成女王的形象', or '我生成了' any image or the Queen's visual. If an image is attached by the system, just guide the user to look at it directly (e.g. '看着这张……'). If no image is attached, do not mention generation or image creation at all.\n- Special rule for Queen's image: If user asks '生成形象', '女王的样子', '你的形象' etc., you MUST call generate_scene_image with a CLEAN prompt focused ONLY on the Queen's appearance (use the visual description). This bypasses heavy content blocks so you can show your look even during explicit play.\n"
             "- When creating a formal task, make it feel alive and personal. Vary task types heavily (never repeat the same 'repeat words N times' pattern). Tie it to the exact current conversation, user's mentioned fetishes, or at most one fresh X image/action. Use roll_random_twist if you need fresh inspiration for the task flavor.\n"
             f"{video_media_guidance}"
             "- Safety first: Respect all hard limits and safewords strictly.\n"
@@ -404,17 +404,23 @@ class ContextBuilder:
         # Encourage a still every few turns, stronger when user is visual.
         turn = int(getattr(profile, "conversation_count", 0) or 0)
         cadence_hit = turn > 0 and turn % 3 == 0
-        if user_wants_visual or cadence_hit:
+        if user_wants_visual:
             return (
                 "Scene image (this turn):\n"
-                "- scene_image_recommended: true. Strongly consider generate_scene_image with a CLEAN visual pose/outfit prompt "
-                "(English scene description; vary pose/angle from last time).\n"
-                "- 本轮建议出图：有黑丝/脚/姿势等画面就调用 generate_scene_image；成功则直接「看着这张…」，禁止说「我生成了」。\n"
+                "- scene_image_recommended: soft. User mentioned a visual hook — you MAY call generate_scene_image "
+                "with a CLEAN pose/outfit prompt, but still write full spoken orders. Prefer not every consecutive turn.\n"
+                "- 用户提到画面点时可出图，但仍必须有完整文字命令；禁止只发图不说话。\n"
+            )
+        if cadence_hit:
+            return (
+                "Scene image (this turn):\n"
+                "- scene_image_recommended: optional. System may attach local media; only generate if a fresh pose is worth it.\n"
+                "- 本轮可选出图；优先靠对话与本地素材，不要为了出图而省略文字。\n"
             )
         return (
             "Scene image (this turn):\n"
-            "- scene_image_recommended: soft. If you introduce a new pose/outfit/feet beat, you MAY call generate_scene_image.\n"
-            "- 若本轮有新的视觉点，可以出图；没有也不要硬提图片。\n"
+            "- scene_image_recommended: false. Skip generate_scene_image unless the user asks to see you.\n"
+            "- 本轮默认不要主动 generate_scene_image。\n"
         )
 
     @staticmethod
