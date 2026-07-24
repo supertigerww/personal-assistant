@@ -17,16 +17,34 @@ def load_visual_anchor(settings: Any) -> str:
     )
 
 
-def build_scene_image_prompt(*, scene_prompt: str, visual_anchor: str) -> str:
+def build_scene_image_prompt(
+    *,
+    scene_prompt: str,
+    visual_anchor: str,
+    overlay_block: str = "",
+    no_text: bool = False,
+) -> str:
     cleaned_scene = scene_prompt.strip()
     cleaned_anchor = visual_anchor.strip()
+    cleaned_overlay = (overlay_block or "").strip()
+
     if not cleaned_scene:
-        return cleaned_anchor
-    if not cleaned_anchor:
-        return cleaned_scene
+        base = cleaned_anchor
+    elif not cleaned_anchor:
+        base = cleaned_scene
+    else:
+        anchor_key = cleaned_anchor.casefold()[:48]
+        if anchor_key and anchor_key in cleaned_scene.casefold():
+            base = cleaned_scene
+        else:
+            base = f"{cleaned_anchor}\nScene: {cleaned_scene}"
 
-    anchor_key = cleaned_anchor.casefold()[:48]
-    if anchor_key and anchor_key in cleaned_scene.casefold():
-        return cleaned_scene
+    if no_text:
+        return (
+            f"{base}\n"
+            "No on-image text, no captions, no watermarks, no Chinese characters in the frame."
+        ).strip()
 
-    return f"{cleaned_anchor}\nScene: {cleaned_scene}"
+    if cleaned_overlay:
+        return f"{base}\n{cleaned_overlay}".strip()
+    return base

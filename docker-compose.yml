@@ -14,19 +14,11 @@ services:
       - ${HOST_X_ASSETS_PATH:-/vol1/1000/docker/assets/images}:${CONTAINER_X_ASSETS_PATH:-/app/assets/x_assets}
       # Separate mount for DB dir (your data/ containing x_assets.db)
       - ${HOST_X_DB_PATH:-/vol1/1000/docker/assets/data}:${CONTAINER_X_DB_PATH:-/app/assets/x_data}
-      # Local Bot API data (must match telegram-bot-api container; volume is external)
-      - type: volume
-        source: telegram_bot_api_data
-        target: /var/lib/telegram-bot-api
-        read_only: true
+      # Local Bot API data — must be the SAME host path as telegram-bot-api mounts at
+      # /var/lib/telegram-bot-api (this stack uses a bind mount, not a named volume).
+      - ${HOST_TELEGRAM_BOT_API_DATA:-/vol1/1000/docker/telegram-local-api-server/data}:/var/lib/telegram-bot-api:ro
 
 networks:
   telegram-shared:
     external: true
     name: ${TELEGRAM_SHARED_NETWORK:-telegram-shared}
-
-volumes:
-  # Pre-created by / shared with the telegram-bot-api container (not managed by this compose)
-  telegram_bot_api_data:
-    external: true
-    name: ${TELEGRAM_BOT_API_VOLUME_NAME:-telegram-bot-api-data}

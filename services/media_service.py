@@ -9,6 +9,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.image_overlays import (
+    build_overlay_instruction_block,
+    rewrite_scene_without_chat_echo,
+    select_humiliation_overlays,
+)
 from core.luna_visual import build_scene_image_prompt, load_visual_anchor
 from core.media_categories import VideoCategoryIndex
 from core.media_intent import (
@@ -447,7 +452,10 @@ class MediaService:
                             "full body portrait"
                         )
                         reason = "queen_visual_request"
-                    images = await self.generate_scene_image(prompt=gen_prompt)
+                    images = await self.generate_scene_image(
+                        prompt=gen_prompt,
+                        add_humiliation_text=not is_queen_visual,
+                    )
                     if images:
                         logger.info(
                             "Generated supplemental images for user_id=%s reason=%s",
@@ -906,7 +914,13 @@ class MediaService:
         normalized = text.lower()
         return any(marker in normalized for marker in self.QUEEN_VISUAL_MARKERS)
 
-    async def generate_scene_image(self, *, prompt: str, count: int = 1) -> list[str]:
+    async def generate_scene_image(
+        self,
+        *,
+        prompt: str,
+        count: int = 1,
+        add_humiliation_text: bool | None = None,
+    ) -> list[str]:
         is_queen_visual = self._is_queen_visual_request(prompt)
         if self._is_too_explicit_for_image_generation(prompt):
             if is_queen_visual:
@@ -918,9 +932,26 @@ class MediaService:
         # Sanitize the prompt to remove the heaviest terms before sending to image model
         safe_prompt = self._sanitize_image_prompt(prompt)
 
+        # Clean queen portraits stay text-free. Scene images get short humiliating
+        # Chinese overlays so the model does not just paint the user's chat line.
+        include_text = (not is_queen_visual) if add_humiliation_text is None else bool(add_humiliation_text)
+        overlay_block = ""
+        scene_for_model = safe_prompt.strip()
+        if include_text:
+            scene_for_model = rewrite_scene_without_chat_echo(safe_prompt)
+            overlays = select_humiliation_overlays(safe_prompt, count=3)
+            overlay_block = build_overlay_instruction_block(overlays)
+            logger.info(
+                "Image overlays selected count=%s phrases=%s",
+                len(overlays),
+                overlays,
+            )
+
         prompt_text = build_scene_image_prompt(
-            scene_prompt=safe_prompt.strip(),
+            scene_prompt=scene_for_model,
             visual_anchor=self._visual_anchor,
+            overlay_block=overlay_block,
+            no_text=not include_text,
         )
         if not prompt_text:
             logger.debug("Skipping image generation because prompt is empty.")

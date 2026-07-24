@@ -72,11 +72,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "Generate a supplemental image ONLY when local media is clearly insufficient and a concrete visual would help. "
             "NEVER use for extremely graphic, scatological, bodily-fluid-heavy or highly degrading scenes — these will be automatically intercepted to avoid content moderation rejection. "
             "Keep image prompts artistic and visual rather than explicit. "
+            "Describe the SCENE and pose — do NOT paste the user's full chat message into the prompt. "
+            "The system automatically adds multiple short Chinese humiliation slogans as on-image text "
+            "(e.g. 废物/跪好/不许射); you do not invent long sentences for the image. "
             "IMPORTANT: Do NOT mention in your response text that you are generating or have generated any image (especially not '女王的形象' or '我为你生成'). The system will attach the image if successful; your text should only guide the user to look if it is attached. "
             "Special: If user wants the Queen's appearance ('生成形象', '女王的样子'), call this with a clean prompt like "
             "'the dominant Queen, long wavy black hair, soft elegant East Asian face, black latex corset, "
             "leather skirt, sheer pantyhose, black stiletto heels with red soles, full body portrait' — "
-            "this is allowed even in heavy scenes."
+            "this is allowed even in heavy scenes and stays text-free."
         ),
         "parameters": {
             "type": "object",

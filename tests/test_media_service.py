@@ -2,6 +2,11 @@ import json
 
 import pytest
 
+from core.image_overlays import (
+    build_overlay_instruction_block,
+    rewrite_scene_without_chat_echo,
+    select_humiliation_overlays,
+)
 from core.luna_visual import build_scene_image_prompt, load_visual_anchor
 from core.models import ConversationState, UserProfile
 from services import media_service as media_service_module
@@ -74,10 +79,25 @@ def media_call_kwargs(*, context: str, user_id: int) -> dict:
     }
 
 
-def expected_scene_prompt(*, settings, scene_prompt: str) -> str:
+def expected_scene_prompt(
+    *,
+    settings,
+    scene_prompt: str,
+    with_overlays: bool = True,
+    is_queen_visual: bool = False,
+) -> str:
+    if is_queen_visual or not with_overlays:
+        return build_scene_image_prompt(
+            scene_prompt=scene_prompt,
+            visual_anchor=load_visual_anchor(settings),
+            no_text=is_queen_visual,
+        )
+    rewritten = rewrite_scene_without_chat_echo(scene_prompt)
+    overlays = select_humiliation_overlays(scene_prompt, count=3)
     return build_scene_image_prompt(
-        scene_prompt=scene_prompt,
+        scene_prompt=rewritten,
         visual_anchor=load_visual_anchor(settings),
+        overlay_block=build_overlay_instruction_block(overlays),
     )
 
 
