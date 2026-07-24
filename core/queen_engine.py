@@ -69,7 +69,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "name": "generate_scene_image",
         "description": (
-            "Generate a supplemental image ONLY when local media is clearly insufficient and a concrete visual would help. "
+            "Generate a supplemental scene image fairly often when a visual beat would hit harder — "
+            "outfit focus (黑丝/heels/latex), body detail (legs/feet/chest), posture (kneel/sit/step on), "
+            "or when you want the user staring at you while you give a new order. "
+            "Prefer calling this every few turns with a fresh pose/angle rather than only once per session. "
             "NEVER use for extremely graphic, scatological, bodily-fluid-heavy or highly degrading scenes — these will be automatically intercepted to avoid content moderation rejection. "
             "Keep image prompts artistic and visual rather than explicit. "
             "Describe the SCENE and pose — do NOT paste the user's full chat message into the prompt. "
@@ -112,12 +115,43 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "type": "function",
+        "name": "search_sm_play_ideas",
+        "description": (
+            "Search the live internet (web + X via xAI) for real SM / femdom / 调教 play techniques "
+            "and return short digests you can weave into spoken Chinese orders. "
+            "Use when: runtime sm_play_search_recommended=true, the scene feels samey/JOI-looped, "
+            "the user asks for 换花样/新玩法/更狠, or you want a fresh training method (foot, denial, "
+            "service, posture, cuck, sissy, findom, etc.). "
+            "Do NOT call every turn. After results: pick ONE idea, rewrite as your own natural command — "
+            "never paste research notes, never mention 搜索/网页/X/来源/作者."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "description": (
+                        "What to research, e.g. '足控侍奉', '寸止 ruined', '绿帽旁观', "
+                        "'跪姿训练', '女装羞辱', '对比羞辱'. Prefer Chinese."
+                    ),
+                },
+                "scene_hint": {
+                    "type": "string",
+                    "description": "Optional 1-line current scene so results fit the moment.",
+                },
+            },
+            "required": ["topic"],
+        },
+    },
+    {
+        "type": "function",
         "name": "search_x_humiliation",
         "description": (
             "Occasionally search X (Twitter) LIVE for a single fresh femdom humiliation post. "
             "LOW FREQUENCY ONLY: call when runtime x_humiliation_search_recommended=true, "
             "or when the user asks for something newer/harder, or the scene is stuck. "
             "Do NOT call every turn. Most turns should skip this tool entirely. "
+            "For structured play TECHNIQUES (not just a post image/line), prefer search_sm_play_ideas. "
             "Styles include: cuckold/绿帽, sissy/女装羞辱/伪娘, foot_worship, bitch_training, blackmail, denial/寸止, "
             "golden_shower, ejaculation_control, sph, chastity, pegging, joi, maid_training, findom, "
             "public_humiliation, pet_play, forced_bi, hypnosis, objectification, tease_denial, general. "
@@ -838,6 +872,70 @@ class QueenEngine:
                 "state": str(current_profile.state),
             }, None, []
 
+        if name == "search_sm_play_ideas":
+            if not bool(getattr(self.settings, "enable_sm_play_web_search", True)):
+                return {
+                    "ok": False,
+                    "error": "sm_play_web_search_disabled",
+                    "state": str(current_profile.state),
+                }, None, []
+            topic = str(arguments.get("topic", "")).strip()
+            scene_hint = str(arguments.get("scene_hint", "")).strip()
+            if not topic:
+                return {
+                    "ok": False,
+                    "error": "topic_required",
+                    "state": str(current_profile.state),
+                }, None, []
+            hard_limits = list(getattr(current_profile, "hard_limits", None) or [])
+            digest = ""
+            try:
+                digest = await self.grok_client.research_sm_play_ideas(
+                    topic=topic,
+                    scene_hint=scene_hint,
+                    hard_limits=hard_limits,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "SM play research failed for user_id=%s: %s",
+                    current_profile.telegram_user_id,
+                    exc,
+                )
+                return {
+                    "ok": False,
+                    "error": "sm_play_research_failed",
+                    "detail": str(exc)[:200],
+                    "state": str(current_profile.state),
+                }, None, []
+            if not digest:
+                # Local fallback so the turn is never empty of inspiration
+                fallback = self._roll_random_twist(category="humiliation", profile=current_profile)
+                digest = f"（联网结果为空，本地备用）{fallback}"
+            # Persist a short note for future recall (no URLs/sources)
+            try:
+                await self.memory_service.ingest_profile_updates(
+                    current_profile.telegram_user_id,
+                    notes=[f"调教玩法灵感({topic[:40]})：{digest[:280]}"],
+                )
+            except Exception as mem_exc:
+                logger.debug("Failed to store SM play research note: %s", mem_exc)
+            logger.info(
+                "Researched SM play ideas user_id=%s topic=%s length=%s",
+                current_profile.telegram_user_id,
+                topic[:40],
+                len(digest),
+            )
+            return {
+                "ok": True,
+                "topic": topic,
+                "ideas_digest": digest,
+                "instruction": (
+                    "Pick ONE idea only. Rewrite as natural spoken Chinese Queen orders. "
+                    "Do not mention research, web, X, links, or authors."
+                ),
+                "state": str(current_profile.state),
+            }, None, []
+
         if name == "search_x_humiliation":
             styles = str(arguments.get("styles", "all")).strip().lower()
             count = max(1, min(int(arguments.get("count", 2)), 3))  # higher for always-on freshness
@@ -1146,6 +1244,14 @@ class QueenEngine:
             "制造小惊喜：告诉用户‘今天心情特别坏’，接下来惩罚会更重。",
             "让用户选择但其实没得选：给你两个羞辱选项，两个都很下贱。",
             "结合 compliance：既然你这么听话/这么不听话，女王决定……（根据分数调整奖励或加码）。",
+            "切换到足控：命令他盯着脚/鞋底，描述气味与姿态，禁止继续机械撸管循环。",
+            "切换到侍奉幻想：口述舌头服务顺序（脚→腿→别处），要求他一句句复述并想象。",
+            "ruined/寸止变奏：允许到边缘后强制停下，改做姿势汇报，而不是重复‘盯屏幕’。",
+            "身份强化：本回合强制新贱称+短自白，再用该身份接受下一个命令。",
+            "对比羞辱：逼他说出和‘正常男人’的三条差距，说完才允许继续碰自己。",
+            "公开幻想：假设门外有人/镜头，用更小声更狼狈的方式执行一个小动作。",
+            "穿戴/道具：指定丝袜/项圈/手套等细节，让他描述触感再继续。",
+            "冷落停手：突然禁止碰自己，只准跪好回答问题，靠言语加压。",
         ]
 
         if category == "punishment":
@@ -1153,6 +1259,7 @@ class QueenEngine:
                 "随机惩罚：必须用最下贱的称呼自报家门三遍，然后描述自己最丢脸的一刻。",
                 "突然加码：这个回合不允许任何快感，只能纯粹的羞辱和服从姿势。",
                 "写悔过书：立刻写一段200字的检讨，主题是‘我为什么是女王的专属尿壶’。",
+                "罚站/跪姿计时：保持羞耻姿势，期间只能回答问题，不许自慰。",
             ]
         elif category == "mood_shift":
             pool = [
@@ -1163,7 +1270,7 @@ class QueenEngine:
         elif category == "media_focus":
             pool = [
                 "决定给一段‘特别的’视频作为今天的重头戏，先用最详细的语言铺垫期待。",
-                "图片强化：想象生成一张用户必须模仿的姿势照。",
+                "图片强化：调用/暗示一张新姿势图，命令他盯着看并照着想象。",
                 "视频后必须立刻复述视频里的动作并表演给女王看。",
             ]
         elif category == "surprise_order":
@@ -1171,6 +1278,7 @@ class QueenEngine:
                 "突然命令：现在立刻去准备某个道具（即使虚拟也必须描述过程）。",
                 "即时命令：把手放好，不许动，直到女王允许。",
                 "随机小羞辱：必须发一段语音自述（或文字模拟）‘我是女王的贱狗’。",
+                "突然换玩法：从撸管指令切到舔脚/侍奉/对比羞辱其中之一。",
             ]
         else:
             pool = base_twists

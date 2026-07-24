@@ -18,6 +18,8 @@ class StubGrokClient:
         self.prompts: list[tuple[str, int]] = []
         self.video_caption_calls: list[dict[str, str]] = []
         self.video_caption_response = "手别停，盯紧每一帧。"
+        self.image_overlay_calls: list[dict[str, object]] = []
+        self.image_overlay_response: list[str] = ["盯着跪好", "寸止废物", "别眨眼"]
 
     async def generate_image(self, *, prompt: str, count: int = 1) -> list[str]:
         self.prompts.append((prompt, count))
@@ -42,6 +44,22 @@ class StubGrokClient:
             }
         )
         return self.video_caption_response
+
+    async def generate_image_overlay_phrases(
+        self,
+        *,
+        scene_context: str,
+        count: int = 3,
+        themes: list[str] | None = None,
+    ) -> list[str]:
+        self.image_overlay_calls.append(
+            {
+                "scene_context": scene_context,
+                "count": count,
+                "themes": list(themes or []),
+            }
+        )
+        return list(self.image_overlay_response)
 
 
 class StubUserService:
@@ -586,3 +604,30 @@ async def test_generate_scene_image_wraps_luna_anchor(settings):
 
     assert result == ["https://example.com/generated-0.png"]
     assert grok_client.prompts == [(expected_scene_prompt(settings=settings, scene_prompt=scene_prompt), 1)]
+    assert grok_client.image_overlay_calls == []
+
+
+@pytest.mark.asyncio
+async def test_generate_scene_image_uses_llm_overlays_when_enabled(settings):
+    settings.enable_llm_image_overlays = True
+    grok_client = StubGrokClient()
+    grok_client.image_overlay_response = ["黑丝跪稳", "盯紧屏幕", "还没资格"]
+    service = MediaService(settings=settings, grok_client=grok_client)
+    scene_prompt = "黑丝 跪着 寸止 对着屏幕"
+
+    result = await service.generate_scene_image(prompt=scene_prompt, count=1)
+
+    assert result == ["https://example.com/generated-0.png"]
+    assert grok_client.image_overlay_calls
+    prompt_text = grok_client.prompts[0][0]
+    assert "黑丝跪稳" in prompt_text
+    assert "盯紧屏幕" in prompt_text
+    assert "还没资格" in prompt_text
+    # Should not fall back to only pool-generic path for these custom phrases
+    rewritten = rewrite_scene_without_chat_echo(scene_prompt)
+    expected = build_scene_image_prompt(
+        scene_prompt=rewritten,
+        visual_anchor=load_visual_anchor(settings),
+        overlay_block=build_overlay_instruction_block(grok_client.image_overlay_response),
+    )
+    assert prompt_text == expected

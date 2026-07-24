@@ -108,6 +108,8 @@ def test_runtime_context_includes_anti_template_and_x_flag(tmp_path):
         intense_enter_compliance_score=8,
         intense_exit_compliance_score=3,
         x_humiliation_search_interval_turns=4,
+        enable_sm_play_web_search=True,
+        sm_play_search_interval_turns=5,
     )
     (tmp_path / "prompt.txt").write_text("system", encoding="utf-8")
     builder = ContextBuilder(settings)
@@ -130,4 +132,33 @@ def test_runtime_context_includes_anti_template_and_x_flag(tmp_path):
     assert "Anti-template" in system
     assert "x_humiliation_search_recommended: false" in system
     assert "Do NOT call search_x_humiliation" in system
+    assert "sm_play_search_recommended" in system
     assert "跪好" in system
+
+
+def test_sm_play_search_recommended_on_user_request():
+    settings = SimpleNamespace(enable_sm_play_web_search=True, sm_play_search_interval_turns=5)
+    profile = _profile(conversation_count=2)
+    assert (
+        ContextBuilder._sm_play_search_recommended(
+            profile=profile,
+            user_text="来点新玩法换花样",
+            recent_messages=[],
+            settings=settings,
+        )
+        is True
+    )
+
+
+def test_sm_play_search_disabled():
+    settings = SimpleNamespace(enable_sm_play_web_search=False, sm_play_search_interval_turns=5)
+    profile = _profile(conversation_count=10)
+    assert (
+        ContextBuilder._sm_play_search_recommended(
+            profile=profile,
+            user_text="换花样",
+            recent_messages=[],
+            settings=settings,
+        )
+        is False
+    )

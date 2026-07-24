@@ -1,6 +1,8 @@
 from core.image_overlays import (
     build_overlay_instruction_block,
     extract_user_requested_phrases,
+    normalize_overlay_phrases,
+    parse_llm_overlay_phrases,
     rewrite_scene_without_chat_echo,
     select_humiliation_overlays,
 )
@@ -46,3 +48,21 @@ def test_overlay_instruction_requires_listed_phrases_and_forbids_chat_echo():
     assert "跪好" in block
     assert "不许射" in block
     assert "Do NOT render the user's original chat message" in block
+
+
+def test_parse_llm_overlay_phrases_from_json():
+    phrases = parse_llm_overlay_phrases('["盯着跪好", "寸止废物", "别眨眼"]', count=3)
+    assert phrases == ["盯着跪好", "寸止废物", "别眨眼"]
+
+
+def test_parse_llm_overlay_phrases_from_lines_and_drops_long():
+    raw = "1. 跪着看完\n2. 手拿开\n3. 这是一句太长了会被丢掉的对话式羞辱句子啊\n4. 废物"
+    phrases = parse_llm_overlay_phrases(raw, count=3)
+    assert "跪着看完" in phrases
+    assert "手拿开" in phrases
+    assert all(len(p) <= 12 for p in phrases)
+    assert not any("太长了" in p for p in phrases)
+
+
+def test_normalize_overlay_phrases_dedupes():
+    assert normalize_overlay_phrases(["废物", "废物", "跪好", "跪好"], count=3) == ["废物", "跪好"]

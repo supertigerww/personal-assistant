@@ -8,6 +8,7 @@ to render those instead of echoing the user's chat message.
 from __future__ import annotations
 
 import hashlib
+import json
 import random
 import re
 from typing import Iterable
@@ -294,6 +295,72 @@ def rewrite_scene_without_chat_echo(scene_prompt: str) -> str:
         "cold superior expression, sharp composition, dramatic lighting, "
         "no speech bubbles, no user chat transcript, no long Chinese sentences"
     )
+
+
+def normalize_overlay_phrases(
+    raw_phrases: Iterable[str],
+    *,
+    count: int = 3,
+) -> list[str]:
+    """Clamp overlay phrases to short, image-model-friendly Chinese slogans."""
+    safe_count = max(2, min(int(count), 5))
+    selected: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_phrases:
+        cleaned = re.sub(r"\s+", "", (raw or "").strip())
+        cleaned = cleaned.strip("「」『』\"'“”‘’。！？!?，,、；;：:.-—…·")
+        # Drop list markers like "1." "2、" "-"
+        cleaned = re.sub(r"^[\d]+[\.\)、．]\s*", "", cleaned)
+        cleaned = re.sub(r"^[-*•]\s*", "", cleaned)
+        if len(cleaned) < 2 or len(cleaned) > 12:
+            continue
+        # Image models struggle with long conversational runs; keep punchy slogans.
+        if any(sep in cleaned for sep in ("。", "！", "？", "，", ",", "；")):
+            continue
+        key = cleaned.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(cleaned)
+        if len(selected) >= safe_count:
+            break
+    return selected
+
+
+def parse_llm_overlay_phrases(text: str, *, count: int = 3) -> list[str]:
+    """Parse LLM output into short on-image slogans.
+
+    Accepts JSON arrays, one-phrase-per-line, or comma-separated phrases.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return []
+
+    candidates: list[str] = []
+
+    # Prefer a JSON array if present anywhere in the response.
+    json_match = re.search(r"\[[\s\S]*?\]", raw)
+    if json_match:
+        try:
+            parsed = json.loads(json_match.group(0))
+            if isinstance(parsed, list):
+                candidates.extend(str(item) for item in parsed if item is not None)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+
+    if not candidates:
+        # Line-first, then Chinese/English comma splits.
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if "、" in line or "，" in line or "," in line:
+                parts = re.split(r"[、，,]+", line)
+                candidates.extend(parts)
+            else:
+                candidates.append(line)
+
+    return normalize_overlay_phrases(candidates, count=count)
 
 
 def build_overlay_instruction_block(overlays: Iterable[str]) -> str:

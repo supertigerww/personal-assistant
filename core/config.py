@@ -72,12 +72,16 @@ class Settings(BaseSettings):
     assets_videos_path: str = "assets/videos"
     generated_images_path: str = "data/generated_images"
     max_local_video_size_mb: int = 45
-    media_send_probability_normal: float = 0.35
-    media_send_probability_intense: float = 0.55
+    media_send_probability_normal: float = 0.50
+    media_send_probability_intense: float = 0.70
     media_send_probability_aftercare: float = 0.0
     media_send_probability_paused: float = 0.0
     media_random_fallback_probability: float = 0.25
     media_max_items_per_message: int = 1
+    # Soft auto scene-image generation when conversation has visual/play beats
+    # (special markers / explicit image asks still always try when allowed).
+    scene_image_auto_probability_normal: float = 0.42
+    scene_image_auto_probability_intense: float = 0.60
     luna_visual_prompt_path: str = "prompts/luna_visual.txt"
     media_repeat_cooldown_hours: int = 48
     media_repeat_penalty_score: int = 24
@@ -94,6 +98,8 @@ class Settings(BaseSettings):
     video_retry_max_turns_intense: int = 4
     enable_llm_video_caption: bool = True
     video_caption_history_limit: int = 8
+    # Scene-image Chinese overlays: LLM writes short slogans; pool is fallback.
+    enable_llm_image_overlays: bool = True
     video_rotation_score_band: int = 6
     video_folder_aliases_csv: str = (
         "sm=调教,SM,训练,支配,鞭打,束缚,女王,贱狗,跪下,学着,示范;"
@@ -103,6 +109,10 @@ class Settings(BaseSettings):
     x_assets_root: str = "/app/assets/x_assets"
     # How often runtime recommends search_x_humiliation (every N user turns). Default 4 = low-frequency seasoning.
     x_humiliation_search_interval_turns: int = 4
+    # Online SM play-idea research (xAI web_search + x_search). Off if API rejects tools.
+    enable_sm_play_web_search: bool = True
+    # Recommend search_sm_play_ideas about every N turns (independent of X image posts).
+    sm_play_search_interval_turns: int = 5
     # Slightly higher default creativity for dialogue; override via env if needed.
     xai_temperature: float = 0.95
 

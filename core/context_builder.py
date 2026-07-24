@@ -37,6 +37,33 @@ class ContextBuilder:
         "声音再惨点",
         "屁股撅高",
         "继续发料",
+        # Sticky JOI loop — ban when already used recently
+        "对着屏幕",
+        "毁掉快感",
+        "毁掉每一次快感",
+        "握紧那根",
+        "握紧",
+        "只准神着跳",
+        "只准在脑子里",
+        "先给我老实坦白",
+        "盯着我的黑丝",
+        "继续握着",
+    )
+
+    # Rotating play axes injected into runtime so the model does not park on JOI-only.
+    PLAY_AXIS_HINTS = (
+        "foot_worship: 脚/鞋/丝足，命令盯着、描述、幻想侍奉，少提撸管",
+        "service_oral_fantasy: 侍奉/口舌顺序口述，要求复述细节",
+        "posture_training: 跪姿/狗爬/不许动，用姿势与汇报加压",
+        "denial_ruined: 边缘/ruined/强制停手，但换一套口令不要复读旧句",
+        "identity_degrade: 新贱称+短自白/检讨，再给一个服从动作",
+        "compare_humiliation: 对比正常男人/差距清单，逼坦白",
+        "nipple_tease: 乳头玩弄指令与羞耻汇报",
+        "outfit_control: 黑丝/手套/项圈等穿戴细节与触感描述",
+        "ignore_deny_touch: 冷落、禁止碰自己，只准回答问题",
+        "public_fantasy: 被听见/被看见的公开羞辱幻想一小段",
+        "cuck_spectate: 旁观/绿帽幻想一个画面点，不要堆标签",
+        "joi_variant: 若必须 JOI，换节奏/姿势/停手规则，禁止同一套「盯屏幕毁掉快感」",
     )
 
     def __init__(self, settings: Any) -> None:
@@ -144,6 +171,26 @@ class ContextBuilder:
             settings=settings,
         )
         x_search_guidance = ContextBuilder._x_humiliation_search_guidance(recommended=x_search_recommended)
+        sm_play_search_recommended = ContextBuilder._sm_play_search_recommended(
+            profile=profile,
+            user_text=user_text,
+            recent_messages=recent_messages or [],
+            settings=settings,
+        )
+        sm_play_search_guidance = ContextBuilder._sm_play_search_guidance(
+            recommended=sm_play_search_recommended,
+            enabled=bool(getattr(settings, "enable_sm_play_web_search", True)),
+        )
+        play_axis_guidance = ContextBuilder._play_axis_guidance(
+            profile=profile,
+            user_text=user_text,
+            recent_messages=recent_messages or [],
+        )
+        scene_image_guidance = ContextBuilder._scene_image_guidance(
+            profile=profile,
+            user_text=user_text,
+            recent_messages=recent_messages or [],
+        )
 
         return (
             "Runtime context (important for decision making):\n"
@@ -157,6 +204,7 @@ class ContextBuilder:
             f"- task_window_ready: {str(task_window_ready).lower()}\n"
             f"- photo_task_window_ready: {str(photo_task_window_ready).lower()}\n"
             f"- x_humiliation_search_recommended: {str(x_search_recommended).lower()}\n"
+            f"- sm_play_search_recommended: {str(sm_play_search_recommended).lower()}\n"
             f"- next_task_turn: {profile.next_task_turn}\n"
             f"- next_photo_task_turn: {profile.next_photo_task_turn}\n"
             f"- next_video_turn: {profile.next_video_turn}\n"
@@ -173,6 +221,9 @@ class ContextBuilder:
             f"- video_categories_available: {video_categories_context or 'none'}\n"
             "\nOperational reminders (must follow):\n"
             f"{anti_template_guidance}"
+            f"{play_axis_guidance}"
+            f"{scene_image_guidance}"
+            f"{sm_play_search_guidance}"
             f"{x_search_guidance}"
             f"{task_window_guidance}"
             f"{photo_task_window_guidance}"
@@ -186,7 +237,7 @@ class ContextBuilder:
             f"{task_followup_guidance}"
             "- Use recalled_long_term_memories naturally. Never claim ignorance of facts listed there.\n"
             "- When user expresses dislike ('不喜欢', '讨厌', '不要'), immediately record it using update_user_profile.\n"
-            "- Media usage: Prefer local assets. Use generate_scene_image ONLY when the scene is very specific AND visual reinforcement is truly helpful. Never call it for extremely graphic, scat, fluid-heavy, or ultra-degrading content — such requests are automatically intercepted before hitting xAI moderation.\n- NEVER write text claiming you 'generated', '为你生成', '生成女王的形象', or '我生成了' any image or the Queen's visual. If an image is attached by the system, just guide the user to look at it directly (e.g. '看着这张……'). If no image is attached, do not mention generation or image creation at all.\n- Special rule for Queen's image: If user asks '生成形象', '女王的样子', '你的形象' etc., you MUST call generate_scene_image with a CLEAN prompt focused ONLY on the Queen's appearance (use the visual description). This bypasses heavy content blocks so you can show your look even during explicit play.\n"
+            "- Media usage: Prefer local assets when they fit; call generate_scene_image often for pose/outfit/feet/black-stockings visual beats (about every 2-4 turns with a visual hook). Never call it for extremely graphic, scat, fluid-heavy, or ultra-degrading content — such requests are automatically intercepted before hitting xAI moderation.\n- NEVER write text claiming you 'generated', '为你生成', '生成女王的形象', or '我生成了' any image or the Queen's visual. If an image is attached by the system, just guide the user to look at it directly (e.g. '看着这张……'). If no image is attached, do not mention generation or image creation at all.\n- Special rule for Queen's image: If user asks '生成形象', '女王的样子', '你的形象' etc., you MUST call generate_scene_image with a CLEAN prompt focused ONLY on the Queen's appearance (use the visual description). This bypasses heavy content blocks so you can show your look even during explicit play.\n"
             "- When creating a formal task, make it feel alive and personal. Vary task types heavily (never repeat the same 'repeat words N times' pattern). Tie it to the exact current conversation, user's mentioned fetishes, or at most one fresh X image/action. Use roll_random_twist if you need fresh inspiration for the task flavor.\n"
             f"{video_media_guidance}"
             "- Safety first: Respect all hard limits and safewords strictly.\n"
@@ -250,17 +301,189 @@ class ContextBuilder:
             length_mode=length_mode,
         )
 
+        joi_loop = ContextBuilder._detect_joi_loop(recent_assistant)
+        joi_line = (
+            "- JOI-loop detected in recent replies (盯屏幕/握紧/毁掉快感 同类)。本轮禁止再写同一套路，必须换玩法轴。\n"
+            if joi_loop
+            else ""
+        )
+
         return (
             "Anti-template (MUST obey this turn):\n"
             f"{length_line}"
             f"- Do NOT start this reply with any of: {openings_text}\n"
             f"- Do NOT end this reply with any of: {endings_text}\n"
             f"- Avoid reusing these high-frequency phrases this turn: {overused_text}\n"
+            f"{joi_line}"
             "- Max 1-2 fetish themes this turn. No hashtag-list / keyword-collage style.\n"
             "- React to the user's latest message first, then dominate. Never ignore what they just said.\n"
+            "- If the user asked for feet/service/oral fantasy/nipples/etc., follow THAT beat; do not yank them back to screen-staring JOI.\n"
             f"- Style hint for this turn: {style_hint}\n"
             "- If recent assistant replies felt copy-pasted, call roll_random_twist once, then write a fresh angle.\n"
-            "- 禁止固定首尾：不要再「跪好，废物贱狗…」开头，不要用「——继续，别停」当公式收尾。\n"
+            "- 禁止固定首尾：不要再「跪好，废物贱狗…」开头，不要用「——继续，别停」或「对着屏幕毁掉快感」当公式收尾。\n"
+        )
+
+    @staticmethod
+    def _detect_joi_loop(recent_assistant: list[str]) -> bool:
+        if len(recent_assistant) < 2:
+            return False
+        markers = (
+            "对着屏幕",
+            "毁掉快感",
+            "毁掉每一次",
+            "握紧那根",
+            "握紧",
+            "只准神着",
+            "只准在脑子里",
+            "盯着屏幕",
+            "继续握",
+        )
+        hits = 0
+        for reply in recent_assistant[-3:]:
+            if any(marker in reply for marker in markers):
+                hits += 1
+        return hits >= 2
+
+    @staticmethod
+    def _play_axis_guidance(
+        *,
+        profile: UserProfile,
+        user_text: str,
+        recent_messages: list[dict[str, Any]],
+    ) -> str:
+        text = (user_text or "").strip()
+        # User-steered axes take priority so the model does not ignore pivots.
+        if any(k in text for k in ("脚", "脚底", "脚趾", "鞋", "丝足", "美腿")):
+            forced = "foot_worship: 用户提到脚/腿——本轮主轴必须是足控/腿/鞋，禁止拧回纯屏幕 JOI"
+        elif any(k in text for k in ("口交", "舔", "侍奉", "舌头", "含")):
+            forced = "service_oral_fantasy: 用户提到侍奉/口舌——沿这条幻想推进，要求细节复述"
+        elif any(k in text for k in ("乳", "奶", "乳头")):
+            forced = "nipple_tease: 用户提到乳头/胸——本轮做乳头玩弄与羞耻汇报"
+        elif any(k in text for k in ("绿帽", "别人", "旁观", "cuck", "NTR", "ntr")):
+            forced = "cuck_spectate: 用户提到旁观/绿帽——推进一个具体旁观画面"
+        elif any(k in text for k in ("女装", "伪娘", "裙子", "丝袜装")):
+            forced = "outfit_control: 用户提到女装/着装——做穿戴控制与触感描述"
+        else:
+            idx = int(getattr(profile, "conversation_count", 0) or 0) % len(ContextBuilder.PLAY_AXIS_HINTS)
+            forced = ContextBuilder.PLAY_AXIS_HINTS[idx]
+
+        assistant_replies = [
+            str(item.get("content") or "")
+            for item in recent_messages
+            if item.get("role") == "assistant"
+        ]
+        must_rotate = ContextBuilder._detect_joi_loop(assistant_replies[-3:])
+        rotate_line = (
+            "- Recent replies were JOI-monotone. MUST rotate to the recommended axis (or roll_random_twist) this turn.\n"
+            if must_rotate
+            else "- Even if the user is compliant, proactively weave the recommended axis in naturally — do not wait for them to beg for variety.\n"
+        )
+        return (
+            "Play variety (MUST obey this turn):\n"
+            f"- recommended_play_axis: {forced}\n"
+            f"{rotate_line}"
+            "- Keep 1 main axis (+ optional light secondary). Spoken Chinese, not a fetish menu.\n"
+            "- 本轮按 recommended_play_axis 主动加一种调教玩法，自然写进命令/幻想，不要列清单。\n"
+        )
+
+    @staticmethod
+    def _scene_image_guidance(
+        *,
+        profile: UserProfile,
+        user_text: str,
+        recent_messages: list[dict[str, Any]],
+    ) -> str:
+        text = (user_text or "").strip()
+        visual_hooks = (
+            "黑丝", "丝袜", "脚", "鞋", "高跟", "乳胶", "跪", "形象", "样子",
+            "腿", "手套", "看着", "盯着", "特写",
+        )
+        user_wants_visual = any(h in text for h in visual_hooks) or any(
+            h in text.casefold() for h in ("image", "pic", "photo", "生成")
+        )
+        # Encourage a still every few turns, stronger when user is visual.
+        turn = int(getattr(profile, "conversation_count", 0) or 0)
+        cadence_hit = turn > 0 and turn % 3 == 0
+        if user_wants_visual or cadence_hit:
+            return (
+                "Scene image (this turn):\n"
+                "- scene_image_recommended: true. Strongly consider generate_scene_image with a CLEAN visual pose/outfit prompt "
+                "(English scene description; vary pose/angle from last time).\n"
+                "- 本轮建议出图：有黑丝/脚/姿势等画面就调用 generate_scene_image；成功则直接「看着这张…」，禁止说「我生成了」。\n"
+            )
+        return (
+            "Scene image (this turn):\n"
+            "- scene_image_recommended: soft. If you introduce a new pose/outfit/feet beat, you MAY call generate_scene_image.\n"
+            "- 若本轮有新的视觉点，可以出图；没有也不要硬提图片。\n"
+        )
+
+    @staticmethod
+    def _sm_play_search_recommended(
+        *,
+        profile: UserProfile,
+        user_text: str,
+        recent_messages: list[dict[str, Any]],
+        settings: Any | None,
+    ) -> bool:
+        """When True, Queen may call search_sm_play_ideas once for live technique research."""
+        if settings is not None and not bool(getattr(settings, "enable_sm_play_web_search", True)):
+            return False
+        interval = int(getattr(settings, "sm_play_search_interval_turns", 5) or 5)
+        interval = max(3, interval)
+        turn = int(getattr(profile, "conversation_count", 0) or 0)
+        text = (user_text or "").strip()
+
+        trigger_keywords = (
+            "换花样",
+            "换一个",
+            "新玩法",
+            "别的玩法",
+            "无聊",
+            "重复",
+            "没意思",
+            "单调",
+            "再狠",
+            "更狠",
+            "来点新",
+            "教我",
+            "训练我",
+            "怎么玩",
+            "玩法",
+        )
+        if any(keyword in text for keyword in trigger_keywords):
+            return True
+
+        assistant = [
+            str(item.get("content") or "")
+            for item in recent_messages
+            if item.get("role") == "assistant"
+        ][-3:]
+        if ContextBuilder._detect_joi_loop(assistant):
+            return True
+
+        if turn > 0 and turn % interval == 0:
+            return True
+        return False
+
+    @staticmethod
+    def _sm_play_search_guidance(*, recommended: bool, enabled: bool = True) -> str:
+        if not enabled:
+            return (
+                "- sm_play_web_search is disabled. Do NOT call search_sm_play_ideas. "
+                "Use roll_random_twist / recommended_play_axis instead.\n"
+            )
+        if recommended:
+            return (
+                "- sm_play_search_recommended is true. You MAY call search_sm_play_ideas ONCE "
+                "(topic aligned with recommended_play_axis or the user's pivot). "
+                "Pick ONE idea from the digest and rewrite as natural spoken orders. "
+                "Never mention research/web/X/links/authors.\n"
+                "- 本轮可以联网搜一次调教玩法：只取 1 个点子，用你自己的口吻下令，禁止贴检索原文。\n"
+            )
+        return (
+            "- sm_play_search_recommended is false. Do NOT call search_sm_play_ideas this turn "
+            "unless the user explicitly asks for 新玩法/换花样.\n"
+            "- 本轮默认不联网搜玩法；用对话、推荐玩法轴或 roll_random_twist 推进。\n"
         )
 
     @staticmethod
@@ -409,18 +632,24 @@ class ContextBuilder:
             "one sharp command + stop",
             "deny/reward framing in two sentences",
             "sudden focus shift to one body detail",
+            "ban touch, force a one-line confession",
+            "pivot to feet/legs with one cruel line",
         )
         medium_styles = (
             "react first, then one new order",
             "upgrade last beat without repeating wording",
             "quiet contempt instead of loud insults",
             "force a short confession about what just happened",
+            "service fantasy beat: dictate tongue/order of worship",
+            "posture drill instead of stroke commands",
         )
         long_styles = (
             "scene push with one fetish theme only",
             "memory callback + new pressure",
             "ritual-like instruction without keyword dump",
             "contrast humiliation with concrete sensory detail",
+            "outfit/control detail then a single degrading ritual",
+            "public-fantasy pressure without keyword dump",
         )
         pool = short_styles if length_mode == "short" else medium_styles if length_mode == "medium" else long_styles
         return pool[conversation_fingerprint % len(pool)]

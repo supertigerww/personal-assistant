@@ -11,6 +11,7 @@ from typing import Any
 
 from core.image_overlays import (
     build_overlay_instruction_block,
+    detect_themes,
     rewrite_scene_without_chat_echo,
     select_humiliation_overlays,
 )
@@ -128,6 +129,53 @@ class MediaService:
         "background",
         "scene",
         "shot",
+    )
+    # Fetish / body / prop cues that make a generated still useful even without
+    # explicit "特写/构图" markers — used for soft auto generation.
+    VISUAL_PLAY_MARKERS = (
+        "黑丝",
+        "丝袜",
+        "丝足",
+        "美腿",
+        "腿",
+        "脚",
+        "脚底",
+        "脚趾",
+        "高跟鞋",
+        "红底",
+        "乳胶",
+        "皮裙",
+        "手套",
+        "项圈",
+        "鞭",
+        "跪",
+        "坐",
+        "俯视",
+        "踩",
+        "鞋",
+        "舌头",
+        "嘴唇",
+        "乳",
+        "胸",
+        "屁股",
+        "腰",
+        "全身",
+        "半身",
+        "形象",
+        "样子",
+        "看着",
+        "盯着",
+        "屏幕",
+        "latex",
+        "heels",
+        "pantyhose",
+        "stockings",
+        "feet",
+        "foot",
+        "legs",
+        "corset",
+        "gloves",
+        "collar",
     )
 
     def __init__(
@@ -377,7 +425,12 @@ class MediaService:
             )
             strong_image_match = self._is_good_match(outcome, media_context) and image_payload["images"]
             strong_video_match = should_attach_video and self._is_good_video_match(outcome, media_context)
-            should_generate = await self._should_generate(image_decision_context, user_id, profile=profile)
+            should_generate = await self._should_generate(
+                image_decision_context,
+                user_id,
+                profile=profile,
+                soft_context=media_context,
+            )
 
             is_heavy = self._is_too_explicit_for_image_generation(image_decision_context)
             is_queen_visual = self._is_queen_visual_request(image_decision_context) or self._is_queen_visual_request(user_text)
@@ -427,11 +480,13 @@ class MediaService:
                 logger.info("Using keyword-matched X video for user_id=%s", user_id)
                 return self._bundle_from_payload({"images": [], "videos": x_videos[:1]}, text_before_video=True)
             if x_images or x_videos:
-                # Use X assets (from keyword match OR random fallback when no match) to humiliate
-                if should_attach_video and x_videos:
+                # Prefer scene generation over X stills when the model/heuristic wants a
+                # custom visual beat — keeps generated images from being starved by X matches.
+                prefer_generation_over_x = bool(should_generate or is_queen_visual) and not should_attach_video
+                if should_attach_video and x_videos and not prefer_generation_over_x:
                     logger.info("Using X video (keyword or random fallback) for user_id=%s", user_id)
                     return self._bundle_from_payload({"images": [], "videos": x_videos[:1]}, text_before_video=True)
-                if x_images:
+                if x_images and not prefer_generation_over_x:
                     logger.info("Using X image (keyword or random fallback when no match) for user_id=%s", user_id)
                     return self._bundle_from_payload({"images": x_images[:1], "videos": []})
 
@@ -939,7 +994,7 @@ class MediaService:
         scene_for_model = safe_prompt.strip()
         if include_text:
             scene_for_model = rewrite_scene_without_chat_echo(safe_prompt)
-            overlays = select_humiliation_overlays(safe_prompt, count=3)
+            overlays = await self._resolve_humiliation_overlays(safe_prompt, count=3)
             overlay_block = build_overlay_instruction_block(overlays)
             logger.info(
                 "Image overlays selected count=%s phrases=%s",
@@ -963,6 +1018,48 @@ class MediaService:
         except Exception as exc:
             logger.exception("Image generation request failed: %s", exc)
             raise
+
+    async def _resolve_humiliation_overlays(self, context: str, *, count: int = 3) -> list[str]:
+        """Prefer LLM scene-specific slogans; top up / fall back with the static pool."""
+        safe_count = max(2, min(int(count), 5))
+        pool = select_humiliation_overlays(context, count=safe_count)
+        enable_llm = bool(getattr(self.settings, "enable_llm_image_overlays", True))
+        if not (enable_llm and hasattr(self.grok_client, "generate_image_overlay_phrases")):
+            return pool
+
+        try:
+            themes = detect_themes(context)
+            llm_phrases = await self.grok_client.generate_image_overlay_phrases(
+                scene_context=context,
+                count=safe_count,
+                themes=themes,
+            )
+        except Exception as exc:
+            logger.exception("LLM image overlays failed; using pool fallback: %s", exc)
+            return pool
+
+        if not llm_phrases:
+            logger.info("LLM image overlays empty; using pool fallback.")
+            return pool
+
+        # Prefer LLM order; fill any shortfall from the themed pool without duplicates.
+        merged: list[str] = []
+        seen: set[str] = set()
+        for phrase in list(llm_phrases) + list(pool):
+            key = phrase.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(phrase)
+            if len(merged) >= safe_count:
+                break
+
+        logger.info(
+            "Using image overlays source=llm+pool phrases=%s (llm=%s)",
+            merged,
+            llm_phrases,
+        )
+        return merged
 
     def _sanitize_image_prompt(self, text: str) -> str:
         """Remove or soften the most moderation-triggering terms while keeping visual essence."""
@@ -1010,6 +1107,7 @@ class MediaService:
         user_id: int,
         *,
         profile: Any | None = None,
+        soft_context: str | None = None,
     ) -> bool:
         if not self.settings.enable_image_generation:
             logger.info("Skipping image generation for user_id=%s because ENABLE_IMAGE_GENERATION is false.", user_id)
@@ -1022,12 +1120,12 @@ class MediaService:
             return False
 
         normalized = context.strip().casefold()
-        if not normalized:
+        if not normalized and not (soft_context or "").strip():
             return False
 
         # Lowered sensitivity: if too heavy, skip generation and use local media instead
         # Exception: allow if user specifically requested the Queen's image/appearance
-        is_queen_visual = self._is_queen_visual_request(context)
+        is_queen_visual = self._is_queen_visual_request(context) or self._is_queen_visual_request(soft_context or "")
         if self._is_too_explicit_for_image_generation(context) and not is_queen_visual:
             logger.info(
                 "Heavy explicit content detected for user_id=%s, skipping image generation in favor of local assets.",
@@ -1042,21 +1140,54 @@ class MediaService:
             logger.debug("Image generation enabled by visual scene marker for user_id=%s.", user_id)
             return True
 
-        if self._has_explicit_media_request(normalized) and len(self._extract_context_terms(context)) >= 2:
+        if self._has_explicit_media_request(normalized) and len(self._extract_context_terms(context)) >= 1:
             logger.debug("Image generation enabled by explicit media request for user_id=%s.", user_id)
             return True
 
-        context_terms = self._extract_context_terms(context)
+        # Soft path: visual fetish / body / prop cues in user text OR assistant beat.
+        # Generic short chat without visual beats must not auto-generate.
+        soft_blob = " ".join(part for part in (context, soft_context or "") if part and part.strip())
+        has_visual_play = self._has_visual_play_marker(soft_blob)
+        context_terms = self._extract_context_terms(soft_blob or context)
         descriptive_terms = [term for term in context_terms if len(term) >= 3]
-        decision = len(descriptive_terms) >= 2 and len(normalized) >= 18
-        logger.debug(
-            "Image generation heuristic user_id=%s terms=%s descriptive_terms=%s decision=%s",
+        soft_scene = has_visual_play or (len(descriptive_terms) >= 2 and len(soft_blob) >= 16)
+        if not soft_scene:
+            logger.debug(
+                "Image generation skipped (no soft visual cue) user_id=%s terms=%s",
+                user_id,
+                context_terms[:4],
+            )
+            return False
+
+        chance = self._scene_image_auto_probability(profile)
+        roll = random.random()
+        decision = roll < chance
+        logger.info(
+            "Soft scene image gate user_id=%s visual_play=%s chance=%.2f roll=%.2f decision=%s terms=%s",
             user_id,
-            context_terms[:4],
-            len(descriptive_terms),
+            has_visual_play,
+            chance,
+            roll,
             decision,
+            context_terms[:4],
         )
         return decision
+
+    def _has_visual_play_marker(self, text: str) -> bool:
+        if not text:
+            return False
+        normalized = text.casefold()
+        return any(marker.casefold() in normalized for marker in self.VISUAL_PLAY_MARKERS)
+
+    def _scene_image_auto_probability(self, profile: Any | None) -> float:
+        state = getattr(profile, "state", ConversationState.NORMAL)
+        if state == ConversationState.INTENSE:
+            return self._clamp_probability(
+                getattr(self.settings, "scene_image_auto_probability_intense", 0.60)
+            )
+        return self._clamp_probability(
+            getattr(self.settings, "scene_image_auto_probability_normal", 0.42)
+        )
 
     def _should_attach_media(
         self,

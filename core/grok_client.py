@@ -229,6 +229,136 @@ class GrokClient:
 
         return ""
 
+    async def research_sm_play_ideas(
+        self,
+        *,
+        topic: str,
+        scene_hint: str = "",
+        hard_limits: list[str] | None = None,
+    ) -> str:
+        """Use xAI server-side web_search + x_search to gather SM play technique ideas.
+
+        Returns a short Chinese digest for the Queen persona to rewrite into dialogue.
+        Does not send the final user-facing reply — only research notes.
+        """
+        topic_clean = self._normalize_text(topic)[:120]
+        scene_clean = self._normalize_text(scene_hint)[:200]
+        limits = [item.strip() for item in (hard_limits or []) if item and str(item).strip()]
+        limits_line = "、".join(limits[:12]) if limits else "无"
+        if not topic_clean:
+            return ""
+
+        system = (
+            "你是 SM/女S 调教玩法研究员，只为私人同意的成人角色扮演提供灵感。"
+            "用 web_search 和/或 x_search 查找真实存在的 femdom / 调教 / 羞辱玩法点子。"
+            "输出给「女王 Luna」直接改编进口语中文对话，不是给用户看的百科。"
+            "硬性要求：\n"
+            "- 只写 2～3 条可立刻执行的玩法点子\n"
+            "- 每条包含：玩法名（短）+ 怎么下令（1～2 句命令式中文）+ 可选一个感官细节\n"
+            "- 禁止违法、未成年、真实非自愿伤害、真实线下约见诱导\n"
+            "- 必须避开用户 hard_limits\n"
+            "- 不要贴长文复制、不要 hashtag 堆、不要写链接、不要提「搜索/网页/X/来源」\n"
+            "- 用简洁中文列表输出即可"
+        )
+        user = (
+            f"想找的玩法方向: {topic_clean}\n"
+            f"当前场景线索: {scene_clean or '（无）'}\n"
+            f"用户 hard_limits（禁止触碰）: {limits_line}\n"
+            "请联网检索后，输出 2～3 条可执行的调教玩法点子。"
+        )
+
+        tools = [
+            {"type": "web_search"},
+            {"type": "x_search"},
+        ]
+
+        for attempt in range(1, self._max_retries + 2):
+            try:
+                logger.info(
+                    "Calling xAI responses.create for SM play research attempt=%s topic=%s",
+                    attempt,
+                    topic_clean[:40],
+                )
+                response = await self.client.responses.create(
+                    model=self.settings.xai_model,
+                    input=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    tools=tools,
+                )
+                text = self.extract_text(response).strip()
+                if text:
+                    return text[:1200]
+                return ""
+            except Exception as exc:
+                await self._handle_retryable_error(
+                    operation="responses.create.sm_play_research",
+                    attempt=attempt,
+                    error=exc,
+                )
+        return ""
+
+    async def generate_image_overlay_phrases(
+        self,
+        *,
+        scene_context: str,
+        count: int = 3,
+        themes: list[str] | None = None,
+    ) -> list[str]:
+        """Ask the chat model for short, scene-specific on-image Chinese slogans."""
+        safe_count = max(2, min(int(count), 5))
+        trimmed = self._normalize_text(scene_context)[:240]
+        theme_label = "、".join(themes) if themes else "general humiliation"
+        system = (
+            "你是 Luna，强势 SM 女王。为即将生成的场景图写 2～4 条要画进图片上的"
+            "简体中文羞辱短标语。\n"
+            "硬性要求：\n"
+            f"- 正好输出 {safe_count} 条（不要多不要少）\n"
+            "- 每条 2～8 个汉字（可含少量语气词如「啊」「呢」）\n"
+            "- 命令式、轻蔑、下流、有画面感；要贴合当前场景，不要空洞万能词\n"
+            "- 禁止整句聊天、禁止超过 10 字、禁止标点堆砌、禁止英文 hashtag\n"
+            "- 禁止复述用户原话；可提炼场景里的动作/状态写成羞辱点\n"
+            "- 只输出 JSON 字符串数组，例如 [\"盯着跪好\",\"寸止废物\",\"别眨眼\"]\n"
+            "- 不要解释、不要 markdown、不要其它文字"
+        )
+        user = (
+            f"场景/上下文: {trimmed or '（无）'}\n"
+            f"主题提示: {theme_label}\n"
+            f"输出 {safe_count} 条短羞辱标语 JSON 数组:"
+        )
+
+        for attempt in range(1, self._max_retries + 2):
+            try:
+                logger.info(
+                    "Calling xAI responses.create for image overlays attempt=%s count=%s",
+                    attempt,
+                    safe_count,
+                )
+                response = await self.client.responses.create(
+                    model=self.settings.xai_model,
+                    input=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                )
+                raw = self.extract_text(response).strip()
+                if raw:
+                    from core.image_overlays import parse_llm_overlay_phrases
+
+                    phrases = parse_llm_overlay_phrases(raw, count=safe_count)
+                    if phrases:
+                        return phrases
+                return []
+            except Exception as exc:
+                await self._handle_retryable_error(
+                    operation="responses.create.image_overlays",
+                    attempt=attempt,
+                    error=exc,
+                )
+
+        return []
+
     @staticmethod
     def _format_recent_captions_for_prompt(recent_captions: list[str]) -> str:
         cleaned = [item.strip() for item in recent_captions if item and item.strip()]
