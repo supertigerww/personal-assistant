@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -15,7 +16,6 @@ async def test_save_telegram_photo_downloads_largest_variant(settings, tmp_path,
 
     async def fake_download(file_path: str, destination: str) -> None:
         destination_holder["path"] = str(destination)
-        Path = __import__("pathlib").Path
         Path(destination).write_bytes(b"fake-image")
 
     bot = SimpleNamespace(
@@ -40,3 +40,27 @@ async def test_save_telegram_photo_downloads_largest_variant(settings, tmp_path,
     assert saved.caption == "验证照"
     assert saved.path.endswith(".jpg")
     assert destination_holder["path"] == saved.path
+
+
+@pytest.mark.asyncio
+async def test_save_telegram_photo_copies_local_absolute_path(settings, tmp_path):
+    """Local Bot API returns absolute paths; copy from disk instead of HTTP /file/..."""
+    api_file = tmp_path / "telegram-bot-api" / "token" / "photos" / "file_1.jpg"
+    api_file.parent.mkdir(parents=True)
+    api_file.write_bytes(b"local-bot-api-bytes")
+
+    service = UserPhotoService(settings=settings)
+    bot = SimpleNamespace(
+        get_file=AsyncMock(return_value=SimpleNamespace(file_path=str(api_file))),
+        download_file=AsyncMock(side_effect=AssertionError("should not HTTP download local file")),
+    )
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=42),
+        photo=[SimpleNamespace(file_id="only", file_size=10)],
+        caption=None,
+    )
+
+    saved = await service.save_telegram_photo(bot=bot, message=message)
+
+    assert Path(saved.path).read_bytes() == b"local-bot-api-bytes"
+    bot.download_file.assert_not_awaited()

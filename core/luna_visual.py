@@ -9,9 +9,11 @@ def load_visual_anchor(settings: Any) -> str:
     if prompt_path.exists():
         return prompt_path.read_text(encoding="utf-8").strip()
     return (
-        "Highly detailed realistic East Asian woman, mid-30s, sharp elegant facial features, "
-        "long straight black hair, fair skin, cold arrogant expression, dominant aura, "
-        "black latex corset, black leather skirt, sheer black pantyhose, stiletto heels."
+        "Highly detailed photorealistic East Asian woman, late 20s to early 30s, "
+        "oval soft-elegant face, large almond eyes, confident cold gaze, full rosy lips, "
+        "long voluminous wavy black hair, elegant seductive superior aura, "
+        "shiny black latex corset, black leather short skirt, sheer black pantyhose, "
+        "long black gloves, pointed black stiletto heels with glossy red soles."
     )
 
 

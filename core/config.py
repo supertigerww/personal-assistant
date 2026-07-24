@@ -11,6 +11,12 @@ class Settings(BaseSettings):
 
     bot_token: str
     bot_endpoint: str = "http://telegram-bot-api:8081"
+    # Local Telegram Bot API (--local) returns absolute filesystem paths from getFile.
+    # Must be true when using a self-hosted telegram-bot-api container, otherwise photo download 404s.
+    bot_api_is_local: bool = True
+    # Optional: host path of telegram-bot-api data dir mounted into this container (same path as API).
+    # Example: /var/lib/telegram-bot-api — required for is_local file reads across containers.
+    telegram_bot_api_data_path: str | None = None
     xai_api_key: str | None = None
     xai_model: str = "grok-4.3"
     xai_base_url: str = "https://api.x.ai/v1"
@@ -95,6 +101,11 @@ class Settings(BaseSettings):
     )
     x_assets_db_path: str = "/app/assets/x_data/x_assets.db"
     x_assets_root: str = "/app/assets/x_assets"
+    # How often runtime recommends search_x_humiliation (every N user turns). Default 4 = low-frequency seasoning.
+    x_humiliation_search_interval_turns: int = 4
+    # Slightly higher default creativity for dialogue; override via env if needed.
+    xai_temperature: float = 0.95
+
     @property
     def aftercare_duration_minutes(self) -> int:
         return self.aftercare_minutes

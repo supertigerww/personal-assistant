@@ -73,7 +73,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "NEVER use for extremely graphic, scatological, bodily-fluid-heavy or highly degrading scenes — these will be automatically intercepted to avoid content moderation rejection. "
             "Keep image prompts artistic and visual rather than explicit. "
             "IMPORTANT: Do NOT mention in your response text that you are generating or have generated any image (especially not '女王的形象' or '我为你生成'). The system will attach the image if successful; your text should only guide the user to look if it is attached. "
-            "Special: If user wants the Queen's appearance ('生成形象', '女王的样子'), call this with a clean prompt like 'the dominant Queen in latex corset and heels, full body portrait' — this is allowed even in heavy scenes."
+            "Special: If user wants the Queen's appearance ('生成形象', '女王的样子'), call this with a clean prompt like "
+            "'the dominant Queen, long wavy black hair, soft elegant East Asian face, black latex corset, "
+            "leather skirt, sheer pantyhose, black stiletto heels with red soles, full body portrait' — "
+            "this is allowed even in heavy scenes."
         ),
         "parameters": {
             "type": "object",
@@ -87,7 +90,13 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "name": "roll_random_twist",
-        "description": "Roll a dice for a random domination twist, punishment style, scene variation, or sudden command to increase unpredictability and replayability. Use sparingly when the scene feels repetitive or to inject fresh energy. Return a short creative description the Queen can adapt into dialogue.",
+        "description": (
+            "Roll a dice for a random domination twist, punishment style, scene variation, or sudden command. "
+            "Use when the conversation feels repetitive, anti-template rules block your usual openings, "
+            "or you need a fresh angle WITHOUT pulling keyword-heavy X posts. "
+            "Prefer this over search_x_humiliation on most turns. "
+            "Return a short creative description the Queen can adapt into natural dialogue."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
@@ -102,11 +111,15 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "name": "search_x_humiliation",
         "description": (
-            "Search on X (Twitter) **LIVE and ALWAYS ON** for the freshest recent posts in femdom humiliation styles. "
-            "This online fetch feature is permanently enabled to maximize conversation freshness. "
-            "Styles include: cuckold/绿帽, sissy/女装羞辱/伪娘, foot_worship/第一视角跪舔盯射, bitch_training/母狗贱狗调教, blackmail/胁迫, denial/寸止, golden_shower/圣水/黄金, ejaculation_control/射精控制/边缘/寸止/ruined, sph/小鸡鸡羞辱, chastity/贞操锁, pegging/女插男, joi/撸管指令, maid_training/女仆训练, findom/找金, public_humiliation/公开羞辱, pet_play/宠物调教, forced_bi/强制双, hypnosis/催眠, objectification/物化/家具奴, tease_denial/挑逗拒绝, general. "
-            "Call this tool **every single turn** (or as often as possible) on your own initiative to bring the absolute latest real content from X. Strongly prefer this online search over local for maximum freshness and surprise. Digest the raw post text (and at most its first media) directly into targeted humiliation without mentioning sources. "
-            "Specify styles if you want particular ones."
+            "Occasionally search X (Twitter) LIVE for a single fresh femdom humiliation post. "
+            "LOW FREQUENCY ONLY: call when runtime x_humiliation_search_recommended=true, "
+            "or when the user asks for something newer/harder, or the scene is stuck. "
+            "Do NOT call every turn. Most turns should skip this tool entirely. "
+            "Styles include: cuckold/绿帽, sissy/女装羞辱/伪娘, foot_worship, bitch_training, blackmail, denial/寸止, "
+            "golden_shower, ejaculation_control, sph, chastity, pegging, joi, maid_training, findom, "
+            "public_humiliation, pet_play, forced_bi, hypnosis, objectification, tease_denial, general. "
+            "After results: extract ONE image/action only, rewrite in your own spoken Chinese; "
+            "never dump hashtags or keyword lists; never mention sources/X/authors."
         ),
         "parameters": {
             "type": "object",
@@ -117,7 +130,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 },
                 "count": {
                     "type": "integer",
-                    "description": "Number of posts to return. Use 1 (recommended) when you want to attach its media for the reply; max 2. Default 1.",
+                    "description": "Number of posts to return. Use 1 (recommended); max 2. Default 1.",
                     "default": 1
                 }
             },
@@ -127,11 +140,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "name": "fetch_local_x_humiliation",
         "description": (
-            "Query the local X assets SQLite DB **ONLY as backup** (when online search_x_humiliation fails or returns nothing). "
-            "Returns raw post text and media paths. The Queen should directly digest the post text into humiliation directed at the user (no mention of source, X, author or assets). "
-            "If post text is short or insufficient, generate additional humiliating content. "
-            "Use at most one media (the first) to enhance the humiliation if the post has it. "
-            "The online search_x_humiliation is permanently always-on and strongly preferred for maximum freshness."
+            "Query local X assets SQLite ONLY as backup when online search_x_humiliation fails or returns nothing, "
+            "and only on turns where X material is actually appropriate (see x_humiliation_search_recommended). "
+            "Extract ONE image/action from the post text and rewrite in natural dialogue — no hashtags, no source mention. "
+            "Do not use this every turn."
         ),
         "parameters": {
             "type": "object",
@@ -1178,9 +1190,10 @@ class QueenEngine:
         return twist + " " + random.choice(flavors) if random.random() > 0.4 else twist
 
     def _search_x_humiliation(self, *, styles: str = "all", count: int = 1) -> list[dict]:
-        """Always-on live search on X for fresh humiliation posts.
-        This feature is now permanently enabled for maximum conversation freshness.
-        Uses real-time X search to get the latest relevant posts.
+        """Low-frequency live search on X for a fresh humiliation post.
+
+        Prefer calling only when runtime marks x_humiliation_search_recommended=true.
+        Results should be digested into one spoken detail, not a keyword dump.
         """
         try:
             # Build a strong query for Chinese femdom humiliation content
@@ -1193,7 +1206,6 @@ class QueenEngine:
 
             query = f"({style_filter}) lang:zh min_faves:1 -is:retweet"
 
-            # Call live X search (always on for freshness)
             results = x_keyword_search(
                 query=query,
                 limit=max(count, 3),

@@ -14,6 +14,8 @@ services:
       - ${HOST_X_ASSETS_PATH:-/vol1/1000/docker/assets/images}:${CONTAINER_X_ASSETS_PATH:-/app/assets/x_assets}
       # Separate mount for DB dir (your data/ containing x_assets.db)
       - ${HOST_X_DB_PATH:-/vol1/1000/docker/assets/data}:${CONTAINER_X_DB_PATH:-/app/assets/x_data}
+      # Required for local Bot API photo/file download (same path as telegram-bot-api container)
+      - ${HOST_TELEGRAM_BOT_API_DATA:-telegram-bot-api-data}:/var/lib/telegram-bot-api
 
 networks:
   telegram-shared:

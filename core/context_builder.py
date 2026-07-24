@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +9,36 @@ from core.models import Task, TaskFollowupKind, UserProfile
 
 
 class ContextBuilder:
+    # Openings / endings that commonly collapse into robotic templates.
+    TEMPLATE_OPENING_PREFIXES = (
+        "跪好",
+        "跪好！",
+        "跪好，",
+        "废物贱狗",
+        "贱狗你",
+        "贱狗，",
+    )
+    TEMPLATE_ENDING_PHRASES = (
+        "继续，别停",
+        "继续别停",
+        "给我继续，别停",
+        "给我继续别停",
+        "——继续",
+        "—继续",
+    )
+    HIGH_FREQUENCY_PHRASE_CANDIDATES = (
+        "废物贱狗",
+        "黑丝锁奴绿帽狗",
+        "黑丝锁奴",
+        "绿帽狗",
+        "只配给妓女服务",
+        "狗屌永远不准高潮",
+        "一周都不准喷",
+        "声音再惨点",
+        "屁股撅高",
+        "继续发料",
+    )
+
     def __init__(self, settings: Any) -> None:
         self._settings = settings
         self._prompt_path = Path(settings.prompt_path)
@@ -31,6 +62,7 @@ class ContextBuilder:
     ) -> list[dict[str, str]]:
         runtime_context = self._build_runtime_context(
             profile=profile,
+            user_text=user_text,
             active_task=active_task,
             task_window_ready=task_window_ready,
             photo_task_window_ready=photo_task_window_ready,
@@ -68,6 +100,7 @@ class ContextBuilder:
         recalled_memories: list[dict[str, Any]] | None = None,
         media_turn_hints: MediaTurnHints | None = None,
         video_categories_context: str | None = None,
+        user_text: str = "",
     ) -> str:
         task_summary = "none"
         if active_task is not None:
@@ -100,6 +133,17 @@ class ContextBuilder:
             media_turn_hints=media_turn_hints,
             local_media_summary=local_media_summary,
         )
+        anti_template_guidance = ContextBuilder._anti_template_guidance(
+            user_text=user_text,
+            recent_messages=recent_messages or [],
+        )
+        x_search_recommended = ContextBuilder._x_humiliation_search_recommended(
+            profile=profile,
+            user_text=user_text,
+            recent_messages=recent_messages or [],
+            settings=settings,
+        )
+        x_search_guidance = ContextBuilder._x_humiliation_search_guidance(recommended=x_search_recommended)
 
         return (
             "Runtime context (important for decision making):\n"
@@ -107,11 +151,12 @@ class ContextBuilder:
             f"- current_state: {profile.state}\n"
             f"- conversation_count: {profile.conversation_count}\n"
             f"- compliance_score: {profile.compliance_score}\n"
-            "- randomness_tool_available: You can call roll_random_twist (with optional category) to get fresh unpredictable twists when the scene feels repetitive.\n"
+            "- randomness_tool_available: Call roll_random_twist when the last replies felt samey, openings/endings are blocked, or you need a fresh domination angle. Prefer this over dumping keyword lists.\n"
             f"- intense_enter_compliance_score: {int(getattr(settings, 'intense_enter_compliance_score', 8))}\n"
             f"- intense_exit_compliance_score: {int(getattr(settings, 'intense_exit_compliance_score', 3))}\n"
             f"- task_window_ready: {str(task_window_ready).lower()}\n"
             f"- photo_task_window_ready: {str(photo_task_window_ready).lower()}\n"
+            f"- x_humiliation_search_recommended: {str(x_search_recommended).lower()}\n"
             f"- next_task_turn: {profile.next_task_turn}\n"
             f"- next_photo_task_turn: {profile.next_photo_task_turn}\n"
             f"- next_video_turn: {profile.next_video_turn}\n"
@@ -127,6 +172,8 @@ class ContextBuilder:
             f"- local_videos_available: {local_media_summary.get('videos', 0)}\n"
             f"- video_categories_available: {video_categories_context or 'none'}\n"
             "\nOperational reminders (must follow):\n"
+            f"{anti_template_guidance}"
+            f"{x_search_guidance}"
             f"{task_window_guidance}"
             f"{photo_task_window_guidance}"
             "- Task frequency must stay low: normal state every 10-18 turns, intense state every 6-12 turns. Never issue formal tasks in aftercare or paused state.\n"
@@ -140,12 +187,255 @@ class ContextBuilder:
             "- Use recalled_long_term_memories naturally. Never claim ignorance of facts listed there.\n"
             "- When user expresses dislike ('不喜欢', '讨厌', '不要'), immediately record it using update_user_profile.\n"
             "- Media usage: Prefer local assets. Use generate_scene_image ONLY when the scene is very specific AND visual reinforcement is truly helpful. Never call it for extremely graphic, scat, fluid-heavy, or ultra-degrading content — such requests are automatically intercepted before hitting xAI moderation.\n- NEVER write text claiming you 'generated', '为你生成', '生成女王的形象', or '我生成了' any image or the Queen's visual. If an image is attached by the system, just guide the user to look at it directly (e.g. '看着这张……'). If no image is attached, do not mention generation or image creation at all.\n- Special rule for Queen's image: If user asks '生成形象', '女王的样子', '你的形象' etc., you MUST call generate_scene_image with a CLEAN prompt focused ONLY on the Queen's appearance (use the visual description). This bypasses heavy content blocks so you can show your look even during explicit play.\n"
-            "- **search_x_humiliation (online X) is PERMANENTLY ALWAYS ON**: Call search_x_humiliation EVERY turn (or as often as possible) on your own initiative to get the absolute freshest real-time humiliation posts from X. Strongly prefer online fresh content over local for maximum conversation freshness and unpredictability. Only fall back to fetch_local_x_humiliation if online returns nothing. Do not wait for user prompts. Digest the raw post text directly into targeted humiliation, commands or tasks for the user (never mention sources, X, authors or 'local X'). If text is short, generate additional humiliating content. Use at most ONE media (image or short video) from the returned post if it has media_paths. Actively surprise the user with brand-new material every single turn to keep control.\n"
-            "- When creating a formal task, make it feel alive and personal. Vary task types heavily (never repeat the same 'repeat words N times' pattern). Tie it to the exact current conversation, user's mentioned fetishes, or the X material just digested. Use roll_random_twist if you need fresh inspiration for the task flavor.\n"
+            "- When creating a formal task, make it feel alive and personal. Vary task types heavily (never repeat the same 'repeat words N times' pattern). Tie it to the exact current conversation, user's mentioned fetishes, or at most one fresh X image/action. Use roll_random_twist if you need fresh inspiration for the task flavor.\n"
             f"{video_media_guidance}"
             "- Safety first: Respect all hard limits and safewords strictly.\n"
-            "- Tone: Commanding, stern, lewd and humiliating when appropriate.\n"
+            "- Tone: Commanding, stern, lewd and humiliating when appropriate — but natural spoken Chinese, not keyword collage.\n"
         )
+
+    @staticmethod
+    def _anti_template_guidance(*, user_text: str, recent_messages: list[dict[str, Any]]) -> str:
+        assistant_replies = [
+            str(item.get("content") or "").strip()
+            for item in recent_messages
+            if item.get("role") == "assistant" and str(item.get("content") or "").strip()
+        ]
+        recent_assistant = assistant_replies[-3:]
+
+        banned_openings: list[str] = []
+        banned_endings: list[str] = []
+        for reply in recent_assistant:
+            opening = ContextBuilder._extract_opening(reply)
+            ending = ContextBuilder._extract_ending(reply)
+            if opening:
+                banned_openings.append(opening)
+            if ending:
+                banned_endings.append(ending)
+            for prefix in ContextBuilder.TEMPLATE_OPENING_PREFIXES:
+                if reply.startswith(prefix) and prefix not in banned_openings:
+                    banned_openings.append(prefix)
+            for phrase in ContextBuilder.TEMPLATE_ENDING_PHRASES:
+                if phrase in reply and phrase not in banned_endings:
+                    banned_endings.append(phrase)
+
+        # Keep unique, short list
+        banned_openings = ContextBuilder._unique_keep_order(banned_openings)[:6]
+        banned_endings = ContextBuilder._unique_keep_order(banned_endings)[:6]
+
+        overused = ContextBuilder._find_overused_phrases(assistant_replies[-4:])
+        length_mode = ContextBuilder._length_mode_for_user_text(user_text)
+        if length_mode == "short":
+            length_line = (
+                "- length_mode: short. User message is short/reactive. Reply in 1-3 tight sentences. "
+                "No long monologue, no multi-theme dump.\n"
+                "- 用户这条很短：先点名回应（射了/求/爽/继续等），再给一个短命令。禁止写成长段关键词羞辱文。\n"
+            )
+        elif length_mode == "medium":
+            length_line = (
+                "- length_mode: medium. A normal spoken reply is fine; still prefer natural dialogue over essay.\n"
+                "- 中等长度即可，保持口语，不要堆标签。\n"
+            )
+        else:
+            length_line = (
+                "- length_mode: long_ok. User wrote more detail; you may expand the scene, still max 1-2 fetish themes.\n"
+                "- 用户写得较详：可以展开场景，但仍只抓 1～2 个主轴。\n"
+            )
+
+        openings_text = " / ".join(banned_openings) if banned_openings else "none from recent turns"
+        endings_text = " / ".join(banned_endings) if banned_endings else "none from recent turns"
+        overused_text = " / ".join(overused) if overused else "none detected"
+
+        style_hint = ContextBuilder._style_hint_for_turn(
+            conversation_fingerprint=len(assistant_replies) + len(user_text),
+            length_mode=length_mode,
+        )
+
+        return (
+            "Anti-template (MUST obey this turn):\n"
+            f"{length_line}"
+            f"- Do NOT start this reply with any of: {openings_text}\n"
+            f"- Do NOT end this reply with any of: {endings_text}\n"
+            f"- Avoid reusing these high-frequency phrases this turn: {overused_text}\n"
+            "- Max 1-2 fetish themes this turn. No hashtag-list / keyword-collage style.\n"
+            "- React to the user's latest message first, then dominate. Never ignore what they just said.\n"
+            f"- Style hint for this turn: {style_hint}\n"
+            "- If recent assistant replies felt copy-pasted, call roll_random_twist once, then write a fresh angle.\n"
+            "- 禁止固定首尾：不要再「跪好，废物贱狗…」开头，不要用「——继续，别停」当公式收尾。\n"
+        )
+
+    @staticmethod
+    def _x_humiliation_search_recommended(
+        *,
+        profile: UserProfile,
+        user_text: str,
+        recent_messages: list[dict[str, Any]],
+        settings: Any | None,
+    ) -> bool:
+        interval = int(getattr(settings, "x_humiliation_search_interval_turns", 4) or 4)
+        interval = max(2, interval)
+        turn = int(getattr(profile, "conversation_count", 0) or 0)
+
+        text = (user_text or "").strip()
+        lower = text.casefold()
+        # Explicit user asks for fresher / harder material
+        trigger_keywords = (
+            "再狠",
+            "更狠",
+            "换花样",
+            "换一个",
+            "无聊",
+            "重复",
+            "没意思",
+            "新鲜",
+            "来点新",
+            "刺激一点",
+            "素材",
+        )
+        if any(keyword in text for keyword in trigger_keywords):
+            return True
+
+        # Short reactive turns almost never need external dump
+        if ContextBuilder._length_mode_for_user_text(text) == "short":
+            # Only on interval boundary
+            return turn > 0 and turn % interval == 0
+
+        # Default cadence: every N turns
+        if turn > 0 and turn % interval == 0:
+            return True
+
+        # If last two assistant replies are both very long, prefer twist over more X
+        assistant = [
+            str(item.get("content") or "")
+            for item in recent_messages
+            if item.get("role") == "assistant"
+        ][-2:]
+        if len(assistant) == 2 and all(len(item) > 180 for item in assistant):
+            return False
+
+        # Mild extra chance mid-interval for longer user messages
+        if len(text) >= 40 and turn % interval == (interval // 2):
+            return True
+
+        # "all" / lower unused but kept for future locale triggers
+        _ = lower
+        return False
+
+    @staticmethod
+    def _x_humiliation_search_guidance(*, recommended: bool) -> str:
+        if recommended:
+            return (
+                "- x_humiliation_search_recommended is true. You MAY call search_x_humiliation ONCE for a single fresh image/action. "
+                "Prefer online; fall back to fetch_local_x_humiliation only if online is empty. "
+                "Digest into ONE concrete detail in your own words — no hashtags, no keyword dump, never mention sources/X/authors.\n"
+                "- 本轮可以拉一次 X 素材：只提炼一个画面/动作，用口语写进羞辱，不要标签堆叠。\n"
+            )
+        return (
+            "- x_humiliation_search_recommended is false. Do NOT call search_x_humiliation or fetch_local_x_humiliation this turn. "
+            "Advance the scene with dialogue, memory, and the user's latest message. Use roll_random_twist if you need variety.\n"
+            "- 本轮禁止调用 X 羞辱搜索。靠对话本身推进，不要拼素材库关键词。\n"
+        )
+
+    @staticmethod
+    def _length_mode_for_user_text(user_text: str) -> str:
+        text = (user_text or "").strip()
+        if not text:
+            return "short"
+        # Photo / system submissions may be long wrappers
+        if text.startswith("[") and len(text) > 80:
+            return "long_ok"
+        # Chinese reactive one-liners are often 1–10 chars; keep threshold low.
+        # Examples short: 射了 / 好 / 继续 / 啊啊啊射了
+        # Examples medium: 主人可以今天训练我寸止吗
+        if len(text) <= 10:
+            return "short"
+        if len(text) <= 80:
+            return "medium"
+        return "long_ok"
+
+    @staticmethod
+    def _extract_opening(text: str, *, max_chars: int = 12) -> str:
+        cleaned = re.sub(r"\s+", "", (text or "").strip())
+        if not cleaned:
+            return ""
+        # First clause up to punctuation if short, else prefix
+        for sep in ("，", ",", "。", "！", "!", "？", "?", "…", "——", "—"):
+            if sep in cleaned[: max_chars + 4]:
+                part = cleaned.split(sep, 1)[0]
+                if 2 <= len(part) <= max_chars + 2:
+                    return part
+        return cleaned[:max_chars]
+
+    @staticmethod
+    def _extract_ending(text: str, *, max_chars: int = 16) -> str:
+        cleaned = (text or "").strip()
+        if not cleaned:
+            return ""
+        # Prefer last sentence fragment
+        for sep in ("。", "！", "!", "？", "?", "\n"):
+            if sep in cleaned:
+                tail = cleaned.rsplit(sep, 1)[-1].strip()
+                if tail:
+                    cleaned = tail
+                    break
+        compact = re.sub(r"\s+", "", cleaned)
+        # Strip leading dash-like openers in endings
+        compact = compact.lstrip("—-–―")
+        if len(compact) > max_chars:
+            compact = compact[-max_chars:]
+        return compact
+
+    @staticmethod
+    def _find_overused_phrases(replies: list[str]) -> list[str]:
+        if not replies:
+            return []
+        blob = "\n".join(replies)
+        found: list[str] = []
+        for phrase in ContextBuilder.HIGH_FREQUENCY_PHRASE_CANDIDATES:
+            if blob.count(phrase) >= 1 and phrase not in found:
+                # If it appeared in more than one recent reply, or twice in one long reply
+                appearances = sum(1 for reply in replies if phrase in reply)
+                if appearances >= 2 or blob.count(phrase) >= 2:
+                    found.append(phrase)
+                elif appearances == 1 and len(replies) <= 2:
+                    # Still ban sticky template phrases from the last reply
+                    if phrase in ContextBuilder.HIGH_FREQUENCY_PHRASE_CANDIDATES[:6]:
+                        found.append(phrase)
+        return found[:8]
+
+    @staticmethod
+    def _style_hint_for_turn(*, conversation_fingerprint: int, length_mode: str) -> str:
+        short_styles = (
+            "cold mock of the user's latest reaction only",
+            "one sharp command + stop",
+            "deny/reward framing in two sentences",
+            "sudden focus shift to one body detail",
+        )
+        medium_styles = (
+            "react first, then one new order",
+            "upgrade last beat without repeating wording",
+            "quiet contempt instead of loud insults",
+            "force a short confession about what just happened",
+        )
+        long_styles = (
+            "scene push with one fetish theme only",
+            "memory callback + new pressure",
+            "ritual-like instruction without keyword dump",
+            "contrast humiliation with concrete sensory detail",
+        )
+        pool = short_styles if length_mode == "short" else medium_styles if length_mode == "medium" else long_styles
+        return pool[conversation_fingerprint % len(pool)]
+
+    @staticmethod
+    def _unique_keep_order(values: list[str]) -> list[str]:
+        seen: set[str] = set()
+        result: list[str] = []
+        for value in values:
+            key = value.strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            result.append(key)
+        return result
 
     @staticmethod
     def _video_media_guidance(
@@ -166,7 +456,7 @@ class ContextBuilder:
         if media_turn_hints.user_wants_video:
             return (
                 "- The user explicitly asked for a video. Lead in dominantly; if a matching local video exists, it may attach after your reply.\n"
-                "- 用户要视频：用强势口吻自然铺垫（如「给你看一段…」），不要干巴巴只发文件。\n"
+                "- 用户要视频：用强势口吻自然铺垫（句式每轮换，不要死记「跪好」模板），不要干巴巴只发文件。\n"
             )
 
         if media_turn_hints.video_window_ready:
@@ -175,13 +465,9 @@ class ContextBuilder:
                 "- A video attaches ONLY when your reply clearly sets it up with RICH, creative, dominant foreshadowing; system sends text first, then the clip.\n"
                 "- Video folders are coarse (usually sm/ vs pov/). sm = spectator SM training; pov = first-person humiliation + JOI/edging talk.\n"
                 "- 「撸/寸止/不许射」are verbal orders YOU speak this turn — not extra folders. Pair pov/ clips with stroke/edging commands; pair sm/ with watch-and-learn humiliation.\n"
-                "- Use varied, immersive setups (examples, adapt freely):\n"
-                "  sm → 「先给我跪直了。好好看着这个画面——女王是怎么把贱狗玩弄得哭出来的。每一个细节都给我记清楚。」\n"
-                "  pov → 「跪好，把手放上去……盯着屏幕上的每一个动作。我现在要你学得一模一样，一点都不能差。」\n"
-                "  结合分数/任务 → 「因为你刚才表现还算听话，今天破例给你看一段……看完立刻描述感受，而且不许碰自己。」\n"
-                "- Make the setup feel special and queen-controlled: use sensory details, commands, anticipation. Never just say '看这个视频'.\n"
+                "- Vary the setup every time (do not copy prior openings). Use sensory detail and one clear command. Never just say '看这个视频'.\n"
                 "- Match folder hints in video_categories_available. Do not mention video every turn.\n"
-                "- 此刻可偶尔发视频：要旁观示范提「调教」，要对着用户羞辱提「第一视角/撸/寸止」，系统按 sm/ 或 pov/ 文件夹选片。媒体服务会提供创意铺垫灵感。\n"
+                "- 此刻可偶尔发视频：铺垫要新鲜，避免同一套开头结尾。\n"
             )
 
         return (

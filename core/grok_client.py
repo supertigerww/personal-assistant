@@ -52,13 +52,20 @@ class GrokClient:
                     len(normalized_input),
                     len(request_tools),
                 )
-                response = await self.client.responses.create(
-                    model=self.settings.xai_model,
-                    input=normalized_input,
-                    tools=request_tools,
-                    previous_response_id=previous_response_id,
-                    parallel_tool_calls=True,
-                )
+                create_kwargs: dict[str, Any] = {
+                    "model": self.settings.xai_model,
+                    "input": normalized_input,
+                    "tools": request_tools,
+                    "previous_response_id": previous_response_id,
+                    "parallel_tool_calls": True,
+                }
+                temperature = getattr(self.settings, "xai_temperature", None)
+                if temperature is not None:
+                    try:
+                        create_kwargs["temperature"] = float(temperature)
+                    except (TypeError, ValueError):
+                        logger.debug("Ignoring invalid xai_temperature=%r", temperature)
+                response = await self.client.responses.create(**create_kwargs)
                 logger.info(
                     "xAI responses.create succeeded attempt=%s response_id=%s",
                     attempt,

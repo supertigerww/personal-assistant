@@ -99,8 +99,17 @@ async def main() -> None:
         )
         logger.info("Core services initialized successfully.")
 
-        session = AiohttpSession(api=TelegramAPIServer.from_base(settings.bot_endpoint))
+        api_server = TelegramAPIServer.from_base(
+            settings.bot_endpoint,
+            is_local=bool(getattr(settings, "bot_api_is_local", True)),
+        )
+        session = AiohttpSession(api=api_server)
         bot = Bot(token=settings.bot_token, session=session)
+        logger.info(
+            "Telegram API endpoint=%s is_local=%s",
+            settings.bot_endpoint,
+            api_server.is_local,
+        )
         dispatcher = Dispatcher()
         root_router = build_router()
         dispatcher.include_router(root_router)

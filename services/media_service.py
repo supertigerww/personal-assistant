@@ -438,7 +438,14 @@ class MediaService:
                     reason = "scene_decision"
                     if is_queen_visual:
                         # Use clean prompt focused on the Queen's appearance only
-                        gen_prompt = "the dominant Queen in her signature shiny black latex corset, leather skirt, pantyhose and stiletto heels, elegant and cruel expression, full body view"
+                        gen_prompt = (
+                            "the dominant Queen, photorealistic East Asian woman late 20s to early 30s, "
+                            "oval soft-elegant face, large almond eyes, confident cold gaze, "
+                            "full rosy lips, long voluminous wavy black hair, "
+                            "shiny black latex corset, black leather short skirt, sheer black pantyhose, "
+                            "long black gloves, pointed black stiletto heels with glossy red soles, "
+                            "full body portrait"
+                        )
                         reason = "queen_visual_request"
                     images = await self.generate_scene_image(prompt=gen_prompt)
                     if images:
