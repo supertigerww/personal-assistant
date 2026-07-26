@@ -303,29 +303,36 @@ class GrokClient:
         self,
         *,
         scene_context: str,
-        count: int = 3,
+        count: int = 2,
         themes: list[str] | None = None,
     ) -> list[str]:
         """Ask the chat model for short, scene-specific on-image Chinese slogans."""
-        safe_count = max(2, min(int(count), 5))
-        trimmed = self._normalize_text(scene_context)[:240]
-        theme_label = "、".join(themes) if themes else "general humiliation"
+        safe_count = max(1, min(int(count), 3))
+        trimmed = self._normalize_text(scene_context)[:320]
+        theme_label = "、".join(themes) if themes else "（从上下文自判）"
         system = (
-            "你是 Luna，强势 SM 女王。为即将生成的场景图写 2～4 条要画进图片上的"
-            "简体中文羞辱短标语。\n"
+            "你是 Luna，残忍下流的 SM 女王。为场景图写画在图上的中文羞辱标语。\n"
+            "口吻必须像：贱狗/死贱狗/无脑狗/恋足死狗/锁精狗/奴下奴/绿奴/女装狗，"
+            "命令像：漏精、寸止、盯脚、踩烂、只许漏不准射。\n"
             "硬性要求：\n"
-            f"- 正好输出 {safe_count} 条（不要多不要少）\n"
-            "- 每条 2～8 个汉字（可含少量语气词如「啊」「呢」）\n"
-            "- 命令式、轻蔑、下流、有画面感；要贴合当前场景，不要空洞万能词\n"
-            "- 禁止整句聊天、禁止超过 10 字、禁止标点堆砌、禁止英文 hashtag\n"
-            "- 禁止复述用户原话；可提炼场景里的动作/状态写成羞辱点\n"
-            "- 只输出 JSON 字符串数组，例如 [\"盯着跪好\",\"寸止废物\",\"别眨眼\"]\n"
-            "- 不要解释、不要 markdown、不要其它文字"
+            f"- 正好 {safe_count} 条；图要留白，禁止多写\n"
+            f"- 每条 {2}～{16} 个汉字（可带！），可以超过十字，但不要写成聊天长句\n"
+            "- **必须紧扣当前对话上下文**："
+            "聊脚/鞋→盯脚强制或恋足羞辱；聊锁精→锁奴漏精；聊绿帽→绿奴；"
+            "聊女装→女装狗；聊寸止/漏→只许漏不准射/寸止/流精\n"
+            "- 禁止温柔教练句：禁止「慢点撸」「手别停」「按我节奏」「好好学着」\n"
+            "- 禁止复述用户整段聊天；禁止英文、markdown、编号解释\n"
+            "- 只输出 JSON 字符串数组\n"
+            "好例子："
+            "[\"无脑狗只准看鞋尖！\",\"看着鞋底漏精！\"] 或 "
+            "[\"锁精贱狗盯着脚寸止！\",\"只许漏不准射！\"] 或 "
+            "[\"绿奴恋足废物自己漏！\",\"贱狗！无脑！\"]\n"
+            "坏例子：慢点撸、手别停、好好看着"
         )
         user = (
-            f"场景/上下文: {trimmed or '（无）'}\n"
-            f"主题提示: {theme_label}\n"
-            f"输出 {safe_count} 条短羞辱标语 JSON 数组:"
+            f"当前对话上下文（标语必须与此相关）:\n{trimmed or '（无）'}\n"
+            f"检测到的主题: {theme_label}\n"
+            f"输出 {safe_count} 条贴合上下文的狠脏标语 JSON:"
         )
 
         for attempt in range(1, self._max_retries + 2):

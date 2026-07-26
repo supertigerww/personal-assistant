@@ -80,8 +80,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "IMPORTANT: Do NOT mention in your response text that you are generating or have generated any image (especially not '女王的形象' or '我为你生成'). The system will attach the image if successful; your text should only guide the user to look if it is attached. "
             "Special: If user wants the Queen's appearance ('生成形象', '女王的样子'), call this with a clean prompt like "
             "'the dominant Queen, long wavy black hair, soft elegant East Asian face, black latex corset, "
-            "leather skirt, sheer pantyhose, black stiletto heels with red soles, full body portrait' — "
-            "this is allowed even in heavy scenes and stays text-free."
+            "leather skirt, sheer pantyhose, black stiletto heels with red soles, full body portrait, "
+            "flipping middle finger at camera, correct anatomy exactly two legs' — "
+            "this is allowed even in heavy scenes and stays text-free. "
+            "Always keep poses simple enough for correct limbs (avoid extreme multi-limb clutter)."
         ),
         "parameters": {
             "type": "object",

@@ -111,7 +111,7 @@ def expected_scene_prompt(
             no_text=is_queen_visual,
         )
     rewritten = rewrite_scene_without_chat_echo(scene_prompt)
-    overlays = select_humiliation_overlays(scene_prompt, count=3)
+    overlays = select_humiliation_overlays(scene_prompt, count=2)
     return build_scene_image_prompt(
         scene_prompt=rewritten,
         visual_anchor=load_visual_anchor(settings),

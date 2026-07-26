@@ -940,6 +940,7 @@ class MediaService:
         prompt: str,
         count: int = 1,
         add_humiliation_text: bool | None = None,
+        overlay_context: str | None = None,
     ) -> list[str]:
         is_queen_visual = self._is_queen_visual_request(prompt)
         if self._is_too_explicit_for_image_generation(prompt):
@@ -949,8 +950,10 @@ class MediaService:
                 logger.info("Intercepted and skipped image generation for too explicit/heavy content.")
                 return []
 
-        # Sanitize the prompt to remove the heaviest terms before sending to image model
+        # Sanitize only the *visual* prompt for the image model. Overlay slogans use
+        # raw dialogue context so wording stays tied to the chat and stays crude.
         safe_prompt = self._sanitize_image_prompt(prompt)
+        raw_overlay_context = (overlay_context or prompt or "").strip()
 
         # Clean queen portraits stay text-free. Scene images get short humiliating
         # Chinese overlays so the model does not just paint the user's chat line.
@@ -959,12 +962,13 @@ class MediaService:
         scene_for_model = safe_prompt.strip()
         if include_text:
             scene_for_model = rewrite_scene_without_chat_echo(safe_prompt)
-            overlays = await self._resolve_humiliation_overlays(safe_prompt, count=3)
+            overlays = await self._resolve_humiliation_overlays(raw_overlay_context, count=2)
             overlay_block = build_overlay_instruction_block(overlays)
             logger.info(
-                "Image overlays selected count=%s phrases=%s",
+                "Image overlays selected count=%s phrases=%s context_preview=%s",
                 len(overlays),
                 overlays,
+                raw_overlay_context[:80],
             )
 
         prompt_text = build_scene_image_prompt(
@@ -984,9 +988,9 @@ class MediaService:
             logger.exception("Image generation request failed: %s", exc)
             raise
 
-    async def _resolve_humiliation_overlays(self, context: str, *, count: int = 3) -> list[str]:
+    async def _resolve_humiliation_overlays(self, context: str, *, count: int = 2) -> list[str]:
         """Prefer LLM scene-specific slogans; top up / fall back with the static pool."""
-        safe_count = max(2, min(int(count), 5))
+        safe_count = max(1, min(int(count), 3))
         pool = select_humiliation_overlays(context, count=safe_count)
         enable_llm = bool(getattr(self.settings, "enable_llm_image_overlays", True))
         if not (enable_llm and hasattr(self.grok_client, "generate_image_overlay_phrases")):
@@ -1084,12 +1088,14 @@ class MediaService:
                     "full rosy lips, long voluminous wavy black hair, "
                     "shiny black latex corset, black leather short skirt, sheer black pantyhose, "
                     "long black gloves, pointed black stiletto heels with glossy red soles, "
-                    "full body portrait"
+                    "full body portrait, single subject, correct anatomy, exactly two legs"
                 )
                 reason = "queen_visual_request"
             images = await self.generate_scene_image(
                 prompt=gen_prompt,
                 add_humiliation_text=not is_queen_visual,
+                # Prefer full user+reply context so slogans match the live scene.
+                overlay_context=media_context if not is_queen_visual else None,
             )
             if images:
                 logger.info(

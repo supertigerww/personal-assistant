@@ -3,6 +3,22 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+# Always-on pose + anatomy quality for every generated still.
+MIDDLE_FINGER_GESTURE = (
+    "Pose gesture (REQUIRED): she clearly raises one hand toward the camera/viewer "
+    "and flips the middle finger (obscene insult gesture), dominant mocking expression, "
+    "middle finger fully extended and easy to see; the other hand may rest on hip, thigh, or leg."
+)
+
+ANATOMY_QUALITY_BLOCK = (
+    "Anatomy quality (REQUIRED, strict): photorealistic correct human anatomy; "
+    "exactly ONE head, TWO arms, TWO hands, TWO legs, TWO feet; "
+    "each hand has exactly five fingers, no extra fingers, no missing fingers, no fused fingers; "
+    "no extra limbs, no third leg, no duplicated legs, no merged legs, no broken joints; "
+    "natural limb placement, coherent seated or standing pose, no warped torso; "
+    "clean silhouette, high detail, sharp focus."
+)
+
 
 def load_visual_anchor(settings: Any) -> str:
     prompt_path = Path(getattr(settings, "luna_visual_prompt_path", "prompts/luna_visual.txt"))
@@ -23,6 +39,7 @@ def build_scene_image_prompt(
     visual_anchor: str,
     overlay_block: str = "",
     no_text: bool = False,
+    include_middle_finger: bool = True,
 ) -> str:
     cleaned_scene = scene_prompt.strip()
     cleaned_anchor = visual_anchor.strip()
@@ -39,12 +56,16 @@ def build_scene_image_prompt(
         else:
             base = f"{cleaned_anchor}\nScene: {cleaned_scene}"
 
-    if no_text:
-        return (
-            f"{base}\n"
-            "No on-image text, no captions, no watermarks, no Chinese characters in the frame."
-        ).strip()
+    parts = [base]
+    if include_middle_finger:
+        parts.append(MIDDLE_FINGER_GESTURE)
+    parts.append(ANATOMY_QUALITY_BLOCK)
 
-    if cleaned_overlay:
-        return f"{base}\n{cleaned_overlay}".strip()
-    return base
+    if no_text:
+        parts.append(
+            "No on-image text, no captions, no watermarks, no Chinese characters in the frame."
+        )
+    elif cleaned_overlay:
+        parts.append(cleaned_overlay)
+
+    return "\n".join(part for part in parts if part).strip()
