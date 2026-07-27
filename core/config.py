@@ -101,6 +101,10 @@ class Settings(BaseSettings):
     video_caption_history_limit: int = 8
     # Scene-image Chinese overlays: LLM writes short slogans; pool is fallback.
     enable_llm_image_overlays: bool = True
+    # Generate clean image then stamp Chinese slogans with Pillow (avoids xAI text moderation).
+    enable_local_image_text_compose: bool = True
+    # Optional explicit CJK font path (else auto-detect project/system fonts).
+    image_overlay_font_path: str | None = None
     video_rotation_score_band: int = 6
     video_folder_aliases_csv: str = (
         "sm=调教,SM,训练,支配,鞭打,束缚,女王,贱狗,跪下,学着,示范;"

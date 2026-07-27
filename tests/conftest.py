@@ -83,6 +83,7 @@ def settings(tmp_path):
         video_folder_aliases_csv="sm=调教,SM,训练;pov=第一视角,撸,寸止,羞辱",
         enable_llm_video_caption=False,
         enable_llm_image_overlays=False,
+        enable_local_image_text_compose=True,
         enable_sm_play_web_search=False,
         sm_play_search_interval_turns=5,
         video_caption_history_limit=8,

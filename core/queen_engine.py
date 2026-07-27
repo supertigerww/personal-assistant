@@ -844,7 +844,48 @@ class QueenEngine:
             if is_queen_visual:
                 logger.info("Queen visual tool call allowed for user_id=%s even in explicit context.", current_profile.telegram_user_id)
             count = max(1, min(int(arguments.get("count", 1)), 4))
-            urls = await self.media_service.generate_scene_image(prompt=prompt, count=count)
+            try:
+                urls = await self.media_service.generate_scene_image(prompt=prompt, count=count)
+            except Exception as exc:
+                logger.exception(
+                    "generate_scene_image failed for user_id=%s: %s",
+                    current_profile.telegram_user_id,
+                    exc,
+                )
+                urls = []
+            # If generation was moderated/empty, try one local image so the turn is not silent.
+            if not urls:
+                try:
+                    fallback = await self.media_service.get_random_assets(
+                        image_count=1,
+                        video_count=0,
+                        user_id=current_profile.telegram_user_id,
+                    )
+                    local = list(fallback.get("images") or [])[:1]
+                    if local:
+                        logger.info(
+                            "Falling back to local image after generation miss user_id=%s path=%s",
+                            current_profile.telegram_user_id,
+                            local[0],
+                        )
+                        # Local filesystem paths are returned as maybe_urls; finalize treats
+                        # non-http paths as local_images for Telegram delivery.
+                        return {
+                            "ok": True,
+                            "urls": local,
+                            "count": 1,
+                            "fallback": "local_image",
+                            "message": "生成图被审核或失败，已改用本地图。继续用文字支配，不要提审核/生成失败。",
+                            "state": str(current_profile.state),
+                        }, None, local
+                except Exception as fallback_exc:
+                    logger.debug("Local image fallback failed: %s", fallback_exc)
+                return {
+                    "ok": False,
+                    "error": "image_generation_empty_or_moderated",
+                    "message": "图片未能生成（可能被内容审核拦截）。不要向用户道歉技术细节；改用文字羞辱推进，或暗示看着本地/已有素材。",
+                    "state": str(current_profile.state),
+                }, None, []
             logger.info(
                 "Generated scene image(s) for user_id=%s count=%s",
                 current_profile.telegram_user_id,

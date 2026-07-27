@@ -112,6 +112,13 @@ class GrokClient:
                 )
                 return sources
             except Exception as exc:
+                # Moderation is expected for crude/sexual prompts — never raise to callers.
+                if self._is_content_moderation_error(exc):
+                    logger.warning(
+                        "xAI images.generate rejected by content moderation (returning empty): %s",
+                        exc,
+                    )
+                    return []
                 await self._handle_retryable_error(
                     operation="images.generate",
                     attempt=attempt,
@@ -523,7 +530,7 @@ class GrokClient:
                     error,
                 )
             else:
-                if operation == "images.generate" and "content moderation" in str(error).lower():
+                if operation == "images.generate" and self._is_content_moderation_error(error):
                     logger.warning(
                         "xAI %s rejected by content moderation (expected for explicit scenes): %s",
                         operation,
@@ -552,10 +559,36 @@ class GrokClient:
 
     @staticmethod
     def _is_retryable_error(error: Exception) -> bool:
+        if GrokClient._is_content_moderation_error(error):
+            return False
         status_code = getattr(error, "status_code", None)
         if isinstance(status_code, int):
             return status_code in {408, 409, 429} or status_code >= 500
         return True
+
+    @staticmethod
+    def _is_content_moderation_error(error: Exception) -> bool:
+        text = str(error).lower()
+        markers = (
+            "content moderation",
+            "content-moderated",
+            "content_moderated",
+            "imagine:content-moderated",
+            "moderation",
+        )
+        if any(marker in text for marker in markers):
+            # Avoid treating unrelated "moderation" product names; require imagine/content cues.
+            if "imagine" in text or "content" in text or "moderated" in text:
+                return True
+        code = getattr(error, "code", None)
+        if isinstance(code, str) and "moderat" in code.lower():
+            return True
+        body = getattr(error, "body", None)
+        if isinstance(body, dict):
+            raw = str(body.get("code", "")) + str(body.get("error", ""))
+            if "moderat" in raw.lower():
+                return True
+        return False
 
     def _normalize_payload(self, value: Any) -> Any:
         if isinstance(value, str):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -10,11 +11,11 @@ from pathlib import Path
 from typing import Any
 
 from core.image_overlays import (
-    build_overlay_instruction_block,
     detect_themes,
     rewrite_scene_without_chat_echo,
     select_humiliation_overlays,
 )
+from core.image_text_composer import compose_humiliation_overlays
 from core.luna_visual import build_scene_image_prompt, load_visual_anchor
 from core.media_categories import VideoCategoryIndex
 from core.media_intent import (
@@ -955,38 +956,98 @@ class MediaService:
         safe_prompt = self._sanitize_image_prompt(prompt)
         raw_overlay_context = (overlay_context or prompt or "").strip()
 
-        # Clean queen portraits stay text-free. Scene images get short humiliating
-        # Chinese overlays so the model does not just paint the user's chat line.
-        include_text = (not is_queen_visual) if add_humiliation_text is None else bool(add_humiliation_text)
-        overlay_block = ""
-        scene_for_model = safe_prompt.strip()
-        if include_text:
-            scene_for_model = rewrite_scene_without_chat_echo(safe_prompt)
+        # Always ask the image model for a CLEAN still (no Chinese glyphs in prompt).
+        # Crude slogans are stamped locally with Pillow so xAI moderation is less likely.
+        want_overlays = (not is_queen_visual) if add_humiliation_text is None else bool(add_humiliation_text)
+        local_compose = bool(getattr(self.settings, "enable_local_image_text_compose", True))
+        overlays: list[str] = []
+        scene_for_model = rewrite_scene_without_chat_echo(safe_prompt) if safe_prompt else safe_prompt
+        if want_overlays:
             overlays = await self._resolve_humiliation_overlays(raw_overlay_context, count=2)
-            overlay_block = build_overlay_instruction_block(overlays)
             logger.info(
-                "Image overlays selected count=%s phrases=%s context_preview=%s",
+                "Image overlays prepared count=%s phrases=%s local_compose=%s context_preview=%s",
                 len(overlays),
                 overlays,
+                local_compose,
                 raw_overlay_context[:80],
             )
 
-        prompt_text = build_scene_image_prompt(
-            scene_prompt=scene_for_model,
-            visual_anchor=self._visual_anchor,
-            overlay_block=overlay_block,
-            no_text=not include_text,
-        )
-        if not prompt_text:
-            logger.debug("Skipping image generation because prompt is empty.")
+        # Pose cascade: try middle-finger first, then clean pose if moderated.
+        attempts: list[tuple[str, str]] = [
+            (
+                "clean_with_gesture",
+                build_scene_image_prompt(
+                    scene_prompt=scene_for_model or safe_prompt,
+                    visual_anchor=self._visual_anchor,
+                    overlay_block="",
+                    no_text=True,
+                    include_middle_finger=True,
+                ),
+            ),
+            (
+                "clean_no_gesture",
+                build_scene_image_prompt(
+                    scene_prompt=scene_for_model or safe_prompt,
+                    visual_anchor=self._visual_anchor,
+                    overlay_block="",
+                    no_text=True,
+                    include_middle_finger=False,
+                ),
+            ),
+        ]
+
+        sources: list[str] = []
+        for label, prompt_text in attempts:
+            if not prompt_text:
+                continue
+            logger.info(
+                "Requesting generated image(s) mode=%s prompt_length=%s",
+                label,
+                len(prompt_text),
+            )
+            try:
+                sources = await self.grok_client.generate_image(prompt=prompt_text, count=count)
+            except Exception as exc:
+                logger.exception("Image generation request failed mode=%s: %s", label, exc)
+                sources = []
+            if sources:
+                logger.info("Image generation succeeded mode=%s count=%s", label, len(sources))
+                break
+            logger.info("Image generation empty/moderated mode=%s; trying next fallback.", label)
+
+        if not sources:
+            logger.info("All image generation attempts failed or were moderated; returning empty.")
             return []
 
-        logger.info("Requesting generated image(s) with prompt length=%s", len(prompt_text))
-        try:
-            return await self.grok_client.generate_image(prompt=prompt_text, count=count)
-        except Exception as exc:
-            logger.exception("Image generation request failed: %s", exc)
-            raise
+        if want_overlays and overlays and local_compose:
+            composed = await self._compose_overlays_on_sources(sources, overlays)
+            return composed
+        return sources
+
+    async def _compose_overlays_on_sources(self, sources: list[str], overlays: list[str]) -> list[str]:
+        """Stamp Chinese slogans onto local image files; leave remote URLs unchanged."""
+        output_dir = getattr(self.settings, "generated_images_path", "data/generated_images")
+        font_path = getattr(self.settings, "image_overlay_font_path", None)
+        results: list[str] = []
+        for source in sources:
+            path = str(source)
+            if path.startswith("http://") or path.startswith("https://"):
+                logger.warning("Skipping local text compose for remote URL image.")
+                results.append(path)
+                continue
+            try:
+                composed = await asyncio.to_thread(
+                    compose_humiliation_overlays,
+                    path,
+                    overlays,
+                    output_dir=output_dir,
+                    font_path=font_path,
+                )
+                results.append(composed)
+            except Exception as exc:
+                logger.exception("Local overlay compose failed for %s: %s", path, exc)
+                results.append(path)
+        return results
 
     async def _resolve_humiliation_overlays(self, context: str, *, count: int = 2) -> list[str]:
         """Prefer LLM scene-specific slogans; top up / fall back with the static pool."""

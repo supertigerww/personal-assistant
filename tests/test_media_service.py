@@ -1,12 +1,9 @@
 import json
+from pathlib import Path
 
 import pytest
 
-from core.image_overlays import (
-    build_overlay_instruction_block,
-    rewrite_scene_without_chat_echo,
-    select_humiliation_overlays,
-)
+from core.image_overlays import rewrite_scene_without_chat_echo
 from core.luna_visual import build_scene_image_prompt, load_visual_anchor
 from core.models import ConversationState, UserProfile
 from services import media_service as media_service_module
@@ -104,18 +101,17 @@ def expected_scene_prompt(
     with_overlays: bool = True,
     is_queen_visual: bool = False,
 ) -> str:
-    if is_queen_visual or not with_overlays:
-        return build_scene_image_prompt(
-            scene_prompt=scene_prompt,
-            visual_anchor=load_visual_anchor(settings),
-            no_text=is_queen_visual,
-        )
-    rewritten = rewrite_scene_without_chat_echo(scene_prompt)
-    overlays = select_humiliation_overlays(scene_prompt, count=2)
+    # API prompt is always text-free; Chinese slogans are stamped locally with Pillow.
+    rewritten = (
+        scene_prompt
+        if is_queen_visual
+        else rewrite_scene_without_chat_echo(scene_prompt)
+    )
     return build_scene_image_prompt(
         scene_prompt=rewritten,
         visual_anchor=load_visual_anchor(settings),
-        overlay_block=build_overlay_instruction_block(overlays),
+        no_text=True,
+        include_middle_finger=not is_queen_visual,
     )
 
 
@@ -608,26 +604,35 @@ async def test_generate_scene_image_wraps_luna_anchor(settings):
 
 
 @pytest.mark.asyncio
-async def test_generate_scene_image_uses_llm_overlays_when_enabled(settings):
+async def test_generate_scene_image_uses_llm_overlays_when_enabled(settings, tmp_path):
     settings.enable_llm_image_overlays = True
+    settings.enable_local_image_text_compose = True
+    settings.generated_images_path = str(tmp_path / "generated")
     grok_client = StubGrokClient()
-    grok_client.image_overlay_response = ["黑丝跪稳", "盯紧屏幕", "还没资格"]
+    grok_client.image_overlay_response = ["黑丝跪稳", "盯紧屏幕"]
+    # Local file so Pillow compose can run
+    try:
+        from PIL import Image
+    except ImportError:
+        pytest.skip("Pillow not installed")
+    base = tmp_path / "base.png"
+    Image.new("RGB", (200, 300), color=(20, 20, 20)).save(base)
+
+    async def _local_image(*, prompt: str, count: int = 1) -> list[str]:
+        grok_client.prompts.append((prompt, count))
+        return [str(base)]
+
+    grok_client.generate_image = _local_image  # type: ignore[method-assign]
     service = MediaService(settings=settings, grok_client=grok_client)
     scene_prompt = "黑丝 跪着 寸止 对着屏幕"
 
     result = await service.generate_scene_image(prompt=scene_prompt, count=1)
 
-    assert result == ["https://example.com/generated-0.png"]
     assert grok_client.image_overlay_calls
+    assert result
+    # API prompt must stay free of crude Chinese slogans
     prompt_text = grok_client.prompts[0][0]
-    assert "黑丝跪稳" in prompt_text
-    assert "盯紧屏幕" in prompt_text
-    assert "还没资格" in prompt_text
-    # Should not fall back to only pool-generic path for these custom phrases
-    rewritten = rewrite_scene_without_chat_echo(scene_prompt)
-    expected = build_scene_image_prompt(
-        scene_prompt=rewritten,
-        visual_anchor=load_visual_anchor(settings),
-        overlay_block=build_overlay_instruction_block(grok_client.image_overlay_response),
-    )
-    assert prompt_text == expected
+    assert "黑丝跪稳" not in prompt_text
+    assert "No on-image text" in prompt_text
+    # Local compose produces overlay_*.png
+    assert Path(result[0]).name.startswith("overlay_")
