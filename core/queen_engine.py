@@ -981,7 +981,7 @@ class QueenEngine:
         if name == "search_x_humiliation":
             styles = str(arguments.get("styles", "all")).strip().lower()
             count = max(1, min(int(arguments.get("count", 2)), 3))  # higher for always-on freshness
-            posts = self._search_x_humiliation(styles=styles, count=count)
+            posts = await self._search_x_humiliation(styles=styles, count=count)
             # Save into long-term memory so Luna can recall and reuse these X posts later for more personalized humiliation
             notes_to_ingest = []
             for post in posts:
@@ -1339,262 +1339,110 @@ class QueenEngine:
         flavors = ["", "而且要立刻执行。", "女王现在就想看你反应。", "别让我重复。"]
         return twist + " " + random.choice(flavors) if random.random() > 0.4 else twist
 
-    def _search_x_humiliation(self, *, styles: str = "all", count: int = 1) -> list[dict]:
-        """Low-frequency live search on X for a fresh humiliation post.
+    async def _search_x_humiliation(self, *, styles: str = "all", count: int = 1) -> list[dict]:
+        """Fetch humiliation material: local X assets -> xAI x_search -> samples.
 
         Prefer calling only when runtime marks x_humiliation_search_recommended=true.
         Results should be digested into one spoken detail, not a keyword dump.
         """
+        safe_count = max(1, min(int(count), 3))
+
+        # 1) Local curated X assets DB (may include media paths)
+        if self.x_assets_service is not None:
+            try:
+                local_posts = await self.x_assets_service.search_humiliation_posts(
+                    keywords=self._keywords_from_styles(styles),
+                    limit=safe_count,
+                    styles=styles,
+                )
+                if local_posts:
+                    logger.info(
+                        "X humiliation via local assets styles=%s count=%s",
+                        styles,
+                        len(local_posts),
+                    )
+                    return list(local_posts)[:safe_count]
+            except Exception as exc:
+                logger.warning("Local X assets search failed: %s", exc)
+
+        # 2) Live search via xAI server-side x_search (no broken x_keyword_search symbol)
         try:
-            # Build a strong query for Chinese femdom humiliation content
-            style_filter = ""
-            if styles and styles != "all":
-                style_list = [s.strip().lower() for s in styles.split(",")]
-                style_filter = " OR ".join(style_list)
-            else:
-                style_filter = "绿帽 OR cuckold OR 伪娘 OR sissy OR 母狗 OR 圣水 OR 寸止 OR 羞辱 OR 调教 OR 绿奴 OR 脚奴 OR 母猪"
-
-            query = f"({style_filter}) lang:zh min_faves:1 -is:retweet"
-
-            results = x_keyword_search(
-                query=query,
-                limit=max(count, 3),
-                mode="Latest"
+            digests = await self.grok_client.search_x_humiliation_digest(
+                styles=styles,
+                count=safe_count,
             )
+            if digests:
+                logger.info(
+                    "X humiliation via xAI x_search styles=%s count=%s",
+                    styles,
+                    len(digests),
+                )
+                return digests[:safe_count]
+        except Exception as exc:
+            logger.warning("xAI x_search humiliation failed: %s", exc)
 
-            posts = []
-            for post in results:
-                text = post.get("content", "") or getattr(post, "text", "")
-                if text and len(text) > 15:  # basic quality filter
-                    author = post.get("author", "")
-                    if isinstance(author, dict):
-                        author = author.get("username", "")
-                    posts.append({
-                        "style": styles if styles != "all" else "general",
-                        "text": text,
-                        "author": author,
-                        "url": post.get("url", "") or f"https://x.com/{author}/status/{post.get('id', '')}"
-                    })
+        # 3) Built-in sample blurbs (always available)
+        samples = self._x_humiliation_samples()
+        style_list = [s.strip() for s in styles.split(",")] if styles != "all" else ["all"]
+        filtered: list[dict] = []
+        for post in samples:
+            if "all" in style_list or post["style"] in style_list or any(
+                s in post["style"] for s in style_list
+            ):
+                filtered.append(post)
+        pool = filtered or list(samples)
+        random.shuffle(pool)
+        logger.info(
+            "X humiliation via built-in samples styles=%s count=%s",
+            styles,
+            min(safe_count, len(pool)),
+        )
+        return pool[:safe_count]
 
-            if posts:
-                import random
-                random.shuffle(posts)
-                return posts[:count]
-        except Exception as e:
-            logger.warning("Live online X search failed (falling back to samples for freshness): %s", e)
-
-        # Fallback to small set of high-quality samples only if live X search is temporarily unavailable
-        all_samples = [
+    @staticmethod
+    def _x_humiliation_samples() -> list[dict]:
+        """Small offline sample pool when live/local search is empty."""
+        return [
             {
                 "style": "cuckold",
-                "text": "第一次被绿：初恋女友经验十分丰富，给我起的外号是小F，意思是之前有ABCDE五个前男友。在暑假后她回来，我无意间看到她和前男友约会的聊天记录，再三询问下承认了开房的经过。虽然很表现出愤怒，但是已经偷偷硬了起来…从那起就再也摆脱不了绿帽癖了 #男娘 #绿帽 #绿奴 #女装 #阳痿 #羞辱 #辱骂 #调教",
-                "author": "衣鱼",
-                "url": "https://x.com/yiyu_0714"
+                "text": "第一次被绿：看到聊天记录时已经偷偷硬了，从那起就再也摆脱不了绿帽癖 #绿帽 #羞辱 #调教",
+                "author": "sample",
+                "url": "",
+                "media_paths": [],
             },
-            {
-                "style": "bitch_training",
-                "text": "有没有发情了的骚逼贱母狗 私信我展示 我想知道你能有多淫荡多下贱 #母狗 #反差婊 #调教 #自毁 #母畜 #调教 #女高 #羞辱 #女大 #女高中生 #人妻 #女大学生 #聊骚",
-                "author": "kk",
-                "url": ""
-            },
-            {
-                "style": "golden_shower",
-                "text": "是不是幻想自己是床头那排娃娃，可以盯着主人的玉足，然而现实中的你却只能抱着手机屏幕，恨不得把眼珠子粘在屏幕上，想一头扎进主人双腿中间 #atm奴 #足控 #圣水 #调教 #绿帽 #女S #原味",
-                "author": "11万岁",
-                "url": ""
-            },
-            {
-                "style": "ejaculation_control",
-                "text": "就喜欢被寸止 然后我怎么求都不让高潮 一点不心疼的把我当玩具玩 #羞辱 #控制高潮 #寸止",
-                "author": "抹茶多多",
-                "url": ""
-            },
-        ]
-        import random
-        random.shuffle(all_samples)
-        return all_samples[:count]
-        # Curated sample posts from recent X searches (ONLY Chinese). Replace with live search using the X tools or API.
-        # Styles covered: cuckold/绿帽, sissy/伪娘女装, foot_worship/跪舔足交, bitch_training/母狗贱狗, blackmail/胁迫, general humiliation.
-        all_samples = [
-            # 绿帽 / cuckold + 伪娘
-            {
-                "style": "cuckold",
-                "text": "第一次被绿：初恋女友经验十分丰富，给我起的外号是小F，意思是之前有ABCDE五个前男友。在暑假后她回来，我无意间看到她和前男友约会的聊天记录，再三询问下承认了开房的经过。虽然很表现出愤怒，但是已经偷偷硬了起来…从那起就再也摆脱不了绿帽癖了 #男娘 #绿帽 #绿奴 #女装 #阳痿 #羞辱 #辱骂 #调教",
-                "author": "衣鱼",
-                "url": "https://x.com/yiyu_0714"
-            },
-            {
-                "style": "cuckold",
-                "text": "被女神老婆盯着榨，每天跪等老婆大人回家，爬过去跪舔老婆清理下体的污秽，用换下的内裤套头，原味丝袜套住自己的狗🥒，跪着接吻，吮吸老婆大人的香舌口水，被盯着羞辱，强制跪地喷🐍 #第一视角 #绿帽 #盯射 #口水 #羞辱 #跪舔 #原味 #羞耻",
-                "author": "红绿灯 套路女王femdom",
-                "url": "https://x.com/taolu188"
-            },
-            {
-                "style": "cuckold",
-                "text": "和闺蜜男友做过吗？ #绿帽 #母猪 #羞辱 #反差婊",
-                "author": "爬爬君",
-                "url": ""
-            },
-            # 母狗 / 贱狗 调教 + 胁迫
-            {
-                "style": "bitch_training",
-                "text": "有没有发情了的骚逼贱母狗 私信我展示 我想知道你能有多淫荡多下贱 #母狗 #反差婊 #调教 #自毁 #母畜 #调教 #女高 #羞辱 #女大 #女高中生 #人妻 #女大学生 #聊骚",
-                "author": "kk",
-                "url": ""
-            },
-            {
-                "style": "bitch_training",
-                "text": "爬过来私信我 贱母狗 #母狗 #反差婊 #调教 #自毁 #母畜 #调教 #女高 #羞辱 #女大 #女高中生 #人妻 #女大学生 #聊骚",
-                "author": "Kk",
-                "url": ""
-            },
-            {
-                "style": "bitch_training",
-                "text": "绿奴们，大晚上的，假期来了，想看母狗被粗暴对待，被糟蹋，被蹂躏，被践踏，被狠狠使用，像个肉棒具、肉便器，渴望释放内心最深处最低贱的欲望吗？进贡给野爹吧！带好母狗的私照生活照或者视频相册，让野爹狠狠羞辱！疯狂的夜晚，把母狗们的生活和私照发来，对比下母狗的反差，进贡。438697616！",
-                "author": "康康大哥",
-                "url": ""
-            },
-            {
-                "style": "bitch_training",
-                "text": "你这种从小被管得最死的乖乖女，内心深处却一直幻想被当成肉便器，哪怕有了男朋友，也想被深喉到吐、后入到喷、边干边被羞辱，就是一条发情的母狗，只配被玩烂 想背着男朋友被羞辱调教的女大女研主动点赞私信",
-                "author": "Robert Cox",
-                "url": ""
-            },
-            {
-                "style": "blackmail",
-                "text": "想被人抓住把柄胁迫羞辱 调教玩弄的母狗私 #母狗 #胁迫 #调教 #反差婊 #自毁 #社死 #肉便器 #女高 #女大 #人妻 #OL #羞辱 #露出 #任务 #出轨",
-                "author": "fzfsdfs",
-                "url": ""
-            },
-            # 伪娘 / 女装 + 绿帽
-            {
-                "style": "sissy",
-                "text": "找主人    无底线调教，无底线粗口爆骂，露出，视频，玩死我这个穿媳妇丝袜得变态绿帽伪娘，把我当狗玩",
-                "author": "绿帽人夫",
-                "url": ""
-            },
-            # 跪舔 / 足 / 第一视角 (cuck + foot)
             {
                 "style": "foot_worship",
-                "text": "正在兴头上把你女友老婆女神姐姐妹妹女儿统统贡献出来给我当打飞机的素材，你幻想着我剥夺你的一切只能在旁边跪着舔自己上供对象的脚不是很爽吗，快过来把自己想出卖的对象发给我包让你爽",
-                "author": "Air",
-                "url": ""
-            },
-            # 黄金圣水 / golden shower
-            {
-                "style": "golden_shower",
-                "text": "是不是幻想自己是床头那排娃娃，可以盯着主人的玉足，然而现实中的你却只能抱着手机屏幕，恨不得把眼珠子粘在屏幕上，想一头扎进主人双腿中间 #atm奴 #足控 #圣水 #调教 #绿帽 #女S #原味",
-                "author": "11万岁",
-                "url": ""
-            },
-            # 射精控制 / ejaculation control / 寸止
-            {
-                "style": "ejaculation_control",
-                "text": "就喜欢被寸止 然后我怎么求都不让高潮 一点不心疼的把我当玩具玩 #羞辱 #控制高潮 #寸止",
-                "author": "抹茶多多",
-                "url": ""
+                "text": "跪在脚边只能盯着鞋尖，屏幕里的脚比你这根废物重要一万倍 #足控 #跪舔 #羞辱",
+                "author": "sample",
+                "url": "",
+                "media_paths": [],
             },
             {
                 "style": "ejaculation_control",
-                "text": "大家好，我是二叔。今天给大家讲讲SM里一个羞耻感和臣服感极强的玩法——圣水（也叫淋尿、喝尿、金色淋浴）。圣水玩法是S对M进行淋尿或让M喝尿的调教，属于高度羞辱和支配的玩法，很多M对这个玩法有强烈的心理反应。",
-                "author": "二叔(掌权者)",
-                "url": ""
+                "text": "就喜欢被寸止 怎么求都不让高潮 一点不心疼地把你当玩具 #寸止 #控制高潮 #羞辱",
+                "author": "sample",
+                "url": "",
+                "media_paths": [],
             },
-            # SPH / 小鸡鸡羞辱
             {
-                "style": "sph",
-                "text": "有没有大鸡巴野爹羞辱我的小废屌？",
-                "author": "33 Kingkill",
-                "url": ""
+                "style": "bitch_training",
+                "text": "发情了也要跪好汇报 一声不响就是欠罚的贱狗 #调教 #母狗 #羞辱",
+                "author": "sample",
+                "url": "",
+                "media_paths": [],
             },
-            # Chastity / 贞操锁
+            {
+                "style": "sissy",
+                "text": "女装跪着照镜子 承认自己是伪娘狗再继续 #女装 #伪娘 #羞辱",
+                "author": "sample",
+                "url": "",
+                "media_paths": [],
+            },
             {
                 "style": "chastity",
-                "text": "#女s #女王 #男m #cb锁 #男娘 #调教 #sm #奴 #网调 #雌堕 #性虐 #露出 #自虐 #榨精 #寸止 #肛塞 #灌肠 #反差 #性虐 求送个锁🔒，没有玩过，上交权限，可以带电，听话，负担不起，想怎么玩怎么玩",
-                "author": "小Q",
-                "url": ""
-            },
-            # Pegging / 女插男
-            {
-                "style": "pegging",
-                "text": "在抖音装清纯乖乖女的感觉怎么样？我知道，像你这样从小被管得最死的乖乖女、好学生，在天真烂漫人人喜欢的面具背后，藏着最下贱的幻想就是被当成肉便器，深喉到吐、后入到喷、边干边被羞辱，就是一条发情的母狗，只配被玩喷",
-                "author": "严主s",
-                "url": ""
-            },
-            # Maid / 女仆训练
-            {
-                "style": "maid_training",
-                "text": "就是把照片发给grok，说请根据图片用r18内容羞辱我",
-                "author": "Hacchi",
-                "url": ""
-            },
-            # Findom / 找金
-            {
-                "style": "findom",
-                "text": "Turning losers weak and brainless all night. Footworship , Tease , Joi , Sph , Cei , Cuckolding and Humiliation. Findom Femdom",
-                "author": "BLACKMAIL BRAT",
-                "url": ""
-            },
-            # Public humiliation / 公开羞辱
-            {
-                "style": "public_humiliation",
-                "text": "今天，我被老公亲手送到了工作室... 外面就是高楼和车流，我却被绑得像一条母狗一样，在窗前被猛烈抽插。主人一边操一边说：“叫大声点，让外面的人都听见，你这个被老公送来接受调教的小母狗。”",
-                "author": "BDSM全家桶",
-                "url": ""
-            },
-            # Pet play / 宠物调教 (狗奴)
-            {
-                "style": "pet_play",
-                "text": "绿奴们...想看母狗被粗暴对待，被糟蹋，被蹂躏...像个肉棒具、肉便器...进贡给野爹吧！带好母狗的私照...对比下母狗的反差",
-                "author": "康康大哥",
-                "url": ""
-            },
-            # Forced bi / 强制双
-            {
-                "style": "forced_bi",
-                "text": "找主人 无底线调教...玩死我这个穿媳妇丝袜得变态绿帽伪娘，把我当狗玩",
-                "author": "绿帽人夫",
-                "url": ""
-            },
-            # Hypnosis / 催眠
-            {
-                "style": "hypnosis",
-                "text": "何谓“何以系牝”？此言谬矣。吾所求者，非俗物也，乃心意相通、灵韵契合之知己耳。盖有妇人者，骨中自含卑贱之奴性焉。其目闪烁，不敢正视；其声低微，唯唯诺诺；行则缩肩佝背，状若惊鼠——此等货色，天生便合该匍匐于地，以舌舔舐他人之履尖耳。 #羞辱 #雌畜 #调教",
-                "author": "姬魅魔",
-                "url": ""
-            },
-            # Objectification / 物化
-            {
-                "style": "objectification",
-                "text": "你这种...就是一条发情的母狗，只配被玩烂",
-                "author": "Robert Cox",
-                "url": ""
-            },
-            # Tease and denial / 挑逗拒绝
-            {
-                "style": "tease_denial",
-                "text": "就喜欢被寸止 然后我怎么求都不让高潮 一点不心疼的把我当玩具玩",
-                "author": "抹茶多多",
-                "url": ""
-            },
-            # JOI
-            {
-                "style": "joi",
-                "text": "Turning losers weak and brainless all night. ... Tease , Joi , Sph , Cei , Cuckolding and Humiliation.",
-                "author": "BLACKMAIL BRAT",
-                "url": ""
+                "text": "锁着只能流水 钥匙不在你手里 盯着脚寸止 #锁精 #贞操 #羞辱",
+                "author": "sample",
+                "url": "",
+                "media_paths": [],
             },
         ]
-
-        style_list = [s.strip() for s in styles.split(",")] if styles != "all" else ["all"]
-        filtered = []
-        for p in all_samples:
-            if "all" in style_list or p["style"] in style_list or any(s in p["style"] for s in style_list):
-                filtered.append(p)
-
-        if not filtered:
-            filtered = all_samples[:count]
-
-        import random
-        selected = random.sample(filtered, min(count, len(filtered)))
-        return selected

@@ -236,6 +236,84 @@ class GrokClient:
 
         return ""
 
+    async def search_x_humiliation_digest(
+        self,
+        *,
+        styles: str = "all",
+        count: int = 1,
+    ) -> list[dict[str, str]]:
+        """Use xAI server-side x_search for a short femdom humiliation text digest.
+
+        Returns list of {text, style, media_paths} without author/source for the Queen to rewrite.
+        """
+        safe_count = max(1, min(int(count), 3))
+        style_label = (styles or "all").strip() or "all"
+        system = (
+            "你用 x_search 在 X 上找 1～2 条中文/英文 femdom、调教、羞辱向内容，"
+            "提炼成可给 SM 女王角色扮演用的口语化中文素材摘要。\n"
+            "硬性要求：\n"
+            f"- 输出正好 {safe_count} 条\n"
+            "- 每条 40～120 字中文摘要，保留一个具体画面/动作/命令\n"
+            "- 禁止贴 hashtag 堆、禁止写链接、禁止写作者名、禁止提 X/Twitter/来源\n"
+            "- 禁止未成年内容\n"
+            "- 只输出 JSON 数组，元素形如 "
+            '{"text":"摘要…","style":"foot_worship"}'
+        )
+        user = (
+            f"风格偏好: {style_label}\n"
+            "请检索后输出 JSON 数组。"
+        )
+        for attempt in range(1, self._max_retries + 2):
+            try:
+                logger.info(
+                    "Calling xAI responses.create for X humiliation digest attempt=%s styles=%s",
+                    attempt,
+                    style_label[:40],
+                )
+                response = await self.client.responses.create(
+                    model=self.settings.xai_model,
+                    input=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    tools=[{"type": "x_search"}],
+                )
+                raw = self.extract_text(response).strip()
+                if not raw:
+                    return []
+                import json
+                import re
+
+                match = re.search(r"\[[\s\S]*\]", raw)
+                if not match:
+                    # Single blob as one post
+                    return [{"text": raw[:280], "style": style_label, "media_paths": []}][:safe_count]
+                try:
+                    parsed = json.loads(match.group(0))
+                except json.JSONDecodeError:
+                    return [{"text": raw[:280], "style": style_label, "media_paths": []}][:safe_count]
+                posts: list[dict[str, str]] = []
+                if isinstance(parsed, list):
+                    for item in parsed:
+                        if isinstance(item, dict):
+                            text = str(item.get("text") or "").strip()
+                            style = str(item.get("style") or style_label).strip()
+                        else:
+                            text = str(item).strip()
+                            style = style_label
+                        if len(text) >= 12:
+                            posts.append({"text": text[:400], "style": style, "media_paths": []})
+                        if len(posts) >= safe_count:
+                            break
+                return posts[:safe_count]
+            except Exception as exc:
+                await self._handle_retryable_error(
+                    operation="responses.create.x_humiliation_digest",
+                    attempt=attempt,
+                    error=exc,
+                )
+        return []
+
     async def research_sm_play_ideas(
         self,
         *,
