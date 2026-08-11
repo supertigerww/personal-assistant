@@ -140,12 +140,15 @@ class MediaService:
         "美腿",
         "脚底",
         "脚趾",
+        "脚",
+        "鞋",
         "高跟鞋",
         "红底",
         "乳胶",
         "皮裙",
         "手套",
         "项圈",
+        "跪",
         "俯视",
         "特写",
         "全身",
@@ -415,23 +418,29 @@ class MediaService:
 
             is_heavy = self._is_too_explicit_for_image_generation(image_decision_context)
             is_queen_visual = self._is_queen_visual_request(image_decision_context) or self._is_queen_visual_request(user_text)
-            # For heavy/explicit scenes that would be intercepted, explicitly prefer local media first
-            # Exception: if user specifically wants the Queen's image/appearance, allow generation with clean prompt
+            # Heavy user text → skip generation; still allow library media.
             if is_heavy and not is_queen_visual:
                 should_generate = False
                 logger.info(
-                    "Heavy explicit scene for user_id=%s: forcing local media priority (skipping generation).",
+                    "Heavy explicit scene for user_id=%s: skipping generation, library media still allowed.",
                     user_id,
                 )
 
+            # Prefer AI stills on a cadence even when user message is short (reply may be visual).
+            force_generation = self._force_generation_this_turn(profile) and not is_heavy
+            prefer_generation = bool(should_generate or force_generation or is_queen_visual)
+
             logger.info(
-                "Media decision user_id=%s attach_video=%s explicit_image=%s strong_image=%s strong_video=%s should_generate=%s best_score=%s",
+                "Media decision user_id=%s attach_video=%s explicit_image=%s strong_image=%s "
+                "strong_video=%s should_generate=%s force_generation=%s prefer_generation=%s best_score=%s",
                 user_id,
                 should_attach_video,
                 has_explicit_image_request,
                 bool(strong_image_match),
                 bool(strong_video_match),
                 should_generate,
+                force_generation,
+                prefer_generation,
                 outcome.best_score,
             )
 
@@ -454,7 +463,7 @@ class MediaService:
                 logger.info("Using local image for explicit image request user_id=%s", user_id)
                 return self._bundle_from_payload(image_payload)
 
-            # Queen portrait / explicit "生成形象" always wins over local stock.
+            # Queen portrait always tries generation first.
             if is_queen_visual:
                 generated = await self._try_generate_scene_bundle(
                     user_text=user_text,
@@ -465,41 +474,8 @@ class MediaService:
                 if generated is not None:
                     return generated
 
-            # Local / X first so soft auto-generation does not starve the library.
-            if strong_image_match:
-                if self._should_attach_media(
-                    context=media_context,
-                    user_id=user_id,
-                    profile=profile,
-                    outcome=outcome,
-                ):
-                    logger.info(
-                        "Using strong local image match for user_id=%s with score=%s",
-                        user_id,
-                        outcome.best_score,
-                    )
-                    return self._bundle_from_payload(image_payload)
-                logger.info("Skipped strong local image for user_id=%s after probability gate.", user_id)
-                # Fall through: may still generate or random-attach below.
-
-            x_images = x_payload.get("images", [])
-            x_videos = x_payload.get("videos", [])
-            if should_attach_video and x_videos:
-                logger.info("Using keyword-matched X video for user_id=%s", user_id)
-                return self._bundle_from_payload({"images": [], "videos": x_videos[:1]}, text_before_video=True)
-            if x_images:
-                # X stills only when local didn't attach; soft generation can still run after.
-                if self._should_attach_media(
-                    context=media_context,
-                    user_id=user_id,
-                    profile=profile,
-                    outcome=outcome,
-                ):
-                    logger.info("Using X image for user_id=%s", user_id)
-                    return self._bundle_from_payload({"images": x_images[:1], "videos": []})
-
-            # Soft/auto generation only when no local/X image was chosen.
-            if should_generate:
+            # Prefer AI generation before library/random so sessions are not "only local stock".
+            if prefer_generation and not is_heavy:
                 generated = await self._try_generate_scene_bundle(
                     user_text=user_text,
                     media_context=media_context,
@@ -508,8 +484,55 @@ class MediaService:
                 )
                 if generated is not None:
                     return generated
+                logger.info(
+                    "Generation preferred but empty/moderated for user_id=%s; falling through to library.",
+                    user_id,
+                )
+
+            # Relevant local match (keyword score) — not random stock.
+            if strong_image_match:
+                if self._should_attach_library_media(
+                    context=media_context,
+                    user_id=user_id,
+                    profile=profile,
+                    outcome=outcome,
+                    force=False,
+                ):
+                    logger.info(
+                        "Using strong local image match for user_id=%s with score=%s",
+                        user_id,
+                        outcome.best_score,
+                    )
+                    return self._bundle_from_payload(image_payload)
+                logger.info("Skipped strong local image for user_id=%s after probability gate.", user_id)
+
+            x_images = x_payload.get("images", [])
+            x_videos = x_payload.get("videos", [])
+            if should_attach_video and x_videos:
+                logger.info("Using keyword-matched X video for user_id=%s", user_id)
+                return self._bundle_from_payload({"images": [], "videos": x_videos[:1]}, text_before_video=True)
+            if x_images:
+                if self._should_attach_library_media(
+                    context=media_context,
+                    user_id=user_id,
+                    profile=profile,
+                    outcome=outcome,
+                    force=False,
+                ):
+                    logger.info("Using X image for user_id=%s", user_id)
+                    return self._bundle_from_payload({"images": x_images[:1], "videos": []})
 
             if has_explicit_image_request:
+                # Prefer one more generation attempt with clean scene before random local.
+                if not is_heavy and getattr(self.settings, "enable_image_generation", False):
+                    generated = await self._try_generate_scene_bundle(
+                        user_text=user_text,
+                        media_context=media_context,
+                        user_id=user_id,
+                        is_queen_visual=False,
+                    )
+                    if generated is not None:
+                        return generated
                 fallback = await self.get_random_assets(image_count=1, video_count=0, user_id=user_id)
                 if fallback["images"]:
                     logger.info("Using random image fallback for explicit image request user_id=%s", user_id)
@@ -517,29 +540,28 @@ class MediaService:
                 logger.info("No image available to satisfy explicit image request user_id=%s", user_id)
                 return empty
 
-            if not self._should_attach_media(
+            # Last resort: occasional random library / X (much less aggressive than generation).
+            if not self._should_attach_library_media(
                 context=media_context,
                 user_id=user_id,
                 profile=profile,
                 outcome=outcome,
+                force=self._force_library_this_turn(profile),
             ):
-                logger.info("Skipped automatic media for user_id=%s after probability gate.", user_id)
+                logger.info("Skipped automatic library media for user_id=%s after probability gate.", user_id)
                 return empty
 
-            # If no strong keyword match (local or X), randomly pick from local or X posts
-            # to humiliate the user (as requested: when matching fails, randomly select local or X post)
-            if self.x_assets_service and random.random() < 0.6:  # bias towards X for fresh humiliation content
+            if self.x_assets_service and random.random() < 0.45:
                 try:
                     rand_x = await self.get_random_valid_x_media(user_id)
                     if rand_x:
                         p = Path(rand_x)
                         if p.exists():
                             if p.suffix.lower() in self.IMAGE_SUFFIXES:
-                                logger.info("No keyword match, randomly picked X post to humiliate user_id=%s", user_id)
+                                logger.info("Random X still for user_id=%s", user_id)
                                 return self._bundle_from_payload({"images": [rand_x], "videos": []})
-                            else:
-                                logger.info("No keyword match, randomly picked X video post to humiliate user_id=%s", user_id)
-                                return self._bundle_from_payload({"images": [], "videos": [rand_x]})
+                            logger.info("Random X video for user_id=%s", user_id)
+                            return self._bundle_from_payload({"images": [], "videos": [rand_x]})
                 except Exception:
                     pass
 
@@ -1214,19 +1236,29 @@ class MediaService:
             logger.debug("Image generation enabled by explicit media request for user_id=%s.", user_id)
             return True
 
-        # Soft path: only *user* text with strong outfit/pose cues (not full assistant reply —
-        # otherwise "盯着屏幕" every turn forces generation and starves local media).
-        has_visual_play = self._has_visual_play_marker(context)
-        context_terms = self._extract_context_terms(context)
+        # Soft path: visual cues in user text OR assistant reply (heels/丝/脚/跪…).
+        has_visual_play = self._has_visual_play_marker(context) or self._has_visual_play_marker(
+            soft_context or ""
+        )
+        context_terms = self._extract_context_terms(context or soft_context or "")
         descriptive_terms = [term for term in context_terms if len(term) >= 3]
-        soft_scene = has_visual_play or (len(descriptive_terms) >= 2 and len(normalized) >= 18)
-        if not soft_scene:
+        soft_blob = " ".join(part for part in (context, soft_context or "") if part)
+        soft_scene = has_visual_play or (len(descriptive_terms) >= 2 and len(soft_blob) >= 12)
+        if not soft_scene and not self._force_generation_this_turn(profile):
             logger.debug(
                 "Image generation skipped (no soft visual cue) user_id=%s terms=%s",
                 user_id,
                 context_terms[:4],
             )
             return False
+
+        if self._force_generation_this_turn(profile):
+            logger.info(
+                "Force image generation by turn cadence user_id=%s turn=%s",
+                user_id,
+                getattr(profile, "conversation_count", None),
+            )
+            return True
 
         chance = self._scene_image_auto_probability(profile)
         roll = random.random()
@@ -1252,10 +1284,10 @@ class MediaService:
         state = getattr(profile, "state", ConversationState.NORMAL)
         if state == ConversationState.INTENSE:
             return self._clamp_probability(
-                getattr(self.settings, "scene_image_auto_probability_intense", 0.55)
+                getattr(self.settings, "scene_image_auto_probability_intense", 0.70)
             )
         return self._clamp_probability(
-            getattr(self.settings, "scene_image_auto_probability_normal", 0.40)
+            getattr(self.settings, "scene_image_auto_probability_normal", 0.58)
         )
 
     def _should_attach_media(
@@ -1266,35 +1298,51 @@ class MediaService:
         profile: Any | None,
         outcome: AssetSearchOutcome,
     ) -> bool:
+        # Back-compat alias used by older call sites / tests.
+        return self._should_attach_library_media(
+            context=context,
+            user_id=user_id,
+            profile=profile,
+            outcome=outcome,
+            force=False,
+        )
+
+    def _should_attach_library_media(
+        self,
+        *,
+        context: str,
+        user_id: int,
+        profile: Any | None,
+        outcome: AssetSearchOutcome,
+        force: bool = False,
+    ) -> bool:
         chance = self._media_send_probability(profile)
         if chance <= 0:
-            logger.debug("Automatic media disabled by state for user_id=%s.", user_id)
+            logger.debug("Automatic library media disabled by state for user_id=%s.", user_id)
             return False
 
-        # Cadence force: every N turns always try to attach library media.
-        if self._force_media_this_turn(profile):
+        if force:
             logger.info(
-                "Force media attach by turn cadence user_id=%s turn=%s",
+                "Force library media attach user_id=%s turn=%s",
                 user_id,
                 getattr(profile, "conversation_count", None),
             )
             return True
 
-        # User asking for variety / media-ish cues
-        lowered = (context or "")
+        lowered = context or ""
         if any(k in lowered for k in ("换花样", "玩点别的", "发图", "看图", "图片", "视频", "看看")):
-            chance = min(1.0, chance + 0.25)
+            chance = min(1.0, chance + 0.20)
 
         normalized = context.strip().casefold()
         if self._is_good_match(outcome, context):
-            chance = min(1.0, chance + 0.15)
+            chance = min(1.0, chance + 0.12)
         if self._has_special_scene_marker(normalized):
-            chance = min(1.0, chance + 0.10)
+            chance = min(1.0, chance + 0.08)
 
         roll = random.random()
         decision = roll < chance
         logger.info(
-            "Automatic media gate user_id=%s state=%s chance=%.2f roll=%.2f best_score=%s decision=%s",
+            "Library media gate user_id=%s state=%s chance=%.2f roll=%.2f best_score=%s decision=%s",
             user_id,
             getattr(profile, "state", ConversationState.NORMAL),
             chance,
@@ -1304,14 +1352,31 @@ class MediaService:
         )
         return decision
 
-    def _force_media_this_turn(self, profile: Any | None) -> bool:
+    def _force_generation_this_turn(self, profile: Any | None) -> bool:
+        """Prefer an AI still every N turns (when generation is enabled)."""
         if profile is None:
             return False
+        if not getattr(self.settings, "enable_image_generation", False):
+            return False
         turn = int(getattr(profile, "conversation_count", 0) or 0)
-        every = int(getattr(self.settings, "media_force_every_n_turns", 3) or 0)
+        every = int(getattr(self.settings, "scene_image_force_every_n_turns", 2) or 0)
         if every <= 0 or turn <= 0:
             return False
         return turn % every == 0
+
+    def _force_library_this_turn(self, profile: Any | None) -> bool:
+        """Occasional library stock only as last resort cadence (rarer than generation)."""
+        if profile is None:
+            return False
+        turn = int(getattr(profile, "conversation_count", 0) or 0)
+        every = int(getattr(self.settings, "media_force_every_n_turns", 5) or 0)
+        if every <= 0 or turn <= 0:
+            return False
+        return turn % every == 0
+
+    def _force_media_this_turn(self, profile: Any | None) -> bool:
+        # Back-compat: treat as library force.
+        return self._force_library_this_turn(profile)
 
     def _should_use_random_fallback(
         self,
@@ -1321,25 +1386,24 @@ class MediaService:
         context: str,
         outcome: AssetSearchOutcome,
     ) -> bool:
-        # Always allow random library images when nothing matched — previously this
-        # returned False whenever keywords existed, which starved local media.
-        if self._force_media_this_turn(profile):
+        # Random stock is seasoning only — keep probability modest.
+        if self._force_library_this_turn(profile):
             return True
 
-        chance = self._clamp_probability(getattr(self.settings, "media_random_fallback_probability", 0.55))
+        chance = self._clamp_probability(
+            getattr(self.settings, "media_random_fallback_probability", 0.28)
+        )
         if chance <= 0:
             return False
 
-        # Slightly lower chance if context was very specific but still allow fallback.
         if outcome.keywords or self._extract_context_terms(context):
-            chance = min(1.0, chance * 0.85)
+            chance = min(1.0, chance * 0.75)
 
         roll = random.random()
         decision = roll < chance
         logger.info(
-            "Random fallback media gate user_id=%s state=%s chance=%.2f roll=%.2f decision=%s",
+            "Random fallback media gate user_id=%s chance=%.2f roll=%.2f decision=%s",
             user_id,
-            getattr(profile, "state", ConversationState.NORMAL),
             chance,
             roll,
             decision,

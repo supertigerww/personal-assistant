@@ -72,18 +72,21 @@ class Settings(BaseSettings):
     assets_videos_path: str = "assets/videos"
     generated_images_path: str = "data/generated_images"
     max_local_video_size_mb: int = 45
-    # Probability of attaching *local/X library* media on a soft match turn.
-    media_send_probability_normal: float = 0.62
-    media_send_probability_intense: float = 0.78
+    # Probability of attaching *matched* local/X library media (after generation attempt).
+    media_send_probability_normal: float = 0.40
+    media_send_probability_intense: float = 0.55
     media_send_probability_aftercare: float = 0.0
     media_send_probability_paused: float = 0.0
-    media_random_fallback_probability: float = 0.55
+    # Random stock library only as last resort (keep lower than generation).
+    media_random_fallback_probability: float = 0.28
     media_max_items_per_message: int = 1
-    # Force a library image/video attempt every N user turns even without strong match.
-    media_force_every_n_turns: int = 3
-    # Soft auto *AI scene generation* only after local/X did not attach.
-    scene_image_auto_probability_normal: float = 0.45
-    scene_image_auto_probability_intense: float = 0.60
+    # Force random library stock every N turns only if generation already failed.
+    media_force_every_n_turns: int = 5
+    # Soft auto AI scene generation (preferred over random local).
+    scene_image_auto_probability_normal: float = 0.58
+    scene_image_auto_probability_intense: float = 0.72
+    # Prefer an AI still every N user turns when generation is enabled.
+    scene_image_force_every_n_turns: int = 2
     luna_visual_prompt_path: str = "prompts/luna_visual.txt"
     media_repeat_cooldown_hours: int = 48
     media_repeat_penalty_score: int = 24
