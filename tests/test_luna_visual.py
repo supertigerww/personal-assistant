@@ -11,9 +11,10 @@ def test_build_scene_prompt_includes_anatomy_not_middle_finger_by_default():
         overlay_block='On-image Chinese text: "废物"',
     )
     assert "middle finger" not in prompt.lower()
-    assert "two legs" in prompt.lower()
-    assert "no third leg" in prompt.lower() or "exactly TWO legs" in prompt
+    assert "two legs" in prompt.lower() or "TWO legs" in prompt
+    assert "fused" in prompt.lower() or "separate" in prompt.lower()
     assert "Anatomy quality" in prompt or ANATOMY_QUALITY_BLOCK[:20] in prompt
+    assert "Preferred composition" in prompt or "simple" in prompt.lower()
     assert "废物" in prompt
 
 

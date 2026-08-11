@@ -470,16 +470,24 @@ def rewrite_scene_without_chat_echo(scene_prompt: str) -> str:
     if not cleaned:
         return (
             "dominant East Asian woman in a power-play scene, cold superior gaze, "
-            "dramatic lighting, photorealistic, full or upper body composition"
+            "dramatic lighting, photorealistic, standing three-quarter body, "
+            "simple pose, clear two legs, continuous torso"
         )
 
-    # Already looks like an English visual prompt — keep mostly as-is.
+    # Already looks like an English visual prompt — keep, but strip known hard poses.
     ascii_ratio = sum(1 for ch in cleaned if ord(ch) < 128) / max(len(cleaned), 1)
     if ascii_ratio >= 0.72 and len(cleaned) >= 24:
-        return cleaned
+        return (
+            f"{cleaned}, single complete subject, simple stable pose, "
+            "clear separate legs, no deformed anatomy"
+        )
 
     themes = detect_themes(cleaned)
     theme_hint = "humiliating power-play atmosphere, "
+    pose_hint = (
+        "standing three-quarter view or seated upright with legs together, "
+        "show full continuous torso, "
+    )
     if "denial" in themes or "joi" in themes:
         theme_hint = "edge-control / hands-off domination atmosphere, "
     elif "cuck" in themes:
@@ -487,7 +495,12 @@ def rewrite_scene_without_chat_echo(scene_prompt: str) -> str:
     elif "sissy" in themes:
         theme_hint = "feminization training atmosphere, "
     elif "foot" in themes:
-        theme_hint = "foot-worship power dynamic, "
+        theme_hint = "foot-worship power dynamic, glossy heels visible, "
+        # Pointing a shoe at camera is fine; extreme crossed multi-limb poses often break.
+        pose_hint = (
+            "seated upright on a chair or bench, torso fully visible, "
+            "legs side-by-side or gently extended toward camera, two clear separate legs, "
+        )
     elif "training" in themes:
         theme_hint = "strict training / discipline atmosphere, "
     elif "public" in themes:
@@ -500,10 +513,11 @@ def rewrite_scene_without_chat_echo(scene_prompt: str) -> str:
 
     # Never re-inject the full Chinese chat line — models paint it as captions.
     return (
-        f"photorealistic dominant woman, {theme_hint}{props}"
+        f"photorealistic dominant woman, {theme_hint}{props}{pose_hint}"
         "cold superior expression, sharp composition, dramatic lighting, "
         "single subject only, correct anatomy, exactly two legs and two arms, "
-        "no extra limbs, no speech bubbles, no user chat transcript, no long Chinese sentences"
+        "no fused legs, no extra limbs, no missing torso, "
+        "no speech bubbles, no user chat transcript, no long Chinese sentences"
     )
 
 

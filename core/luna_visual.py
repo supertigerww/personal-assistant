@@ -11,13 +11,24 @@ MIDDLE_FINGER_GESTURE = (
 )
 
 ANATOMY_QUALITY_BLOCK = (
-    "Anatomy quality (REQUIRED, strict): photorealistic correct human anatomy; "
-    "exactly ONE head, TWO arms, TWO hands, TWO legs, TWO feet; "
-    "each hand has exactly five fingers, no extra fingers, no missing fingers, no fused fingers; "
-    "natural relaxed hands (e.g. one hand on hip, other arm relaxed) — do NOT force middle-finger or odd finger poses; "
-    "no extra limbs, no third leg, no duplicated legs, no merged legs, no broken joints; "
-    "natural limb placement, coherent seated or standing pose, no warped torso; "
-    "clean silhouette, high detail, sharp focus."
+    "Anatomy quality (REQUIRED, strict): photorealistic correct human anatomy of ONE complete woman; "
+    "exactly ONE head, ONE neck, ONE torso, TWO arms, TWO hands, TWO legs, TWO feet, TWO shoes; "
+    "each hand has exactly five fingers; natural hands (on hip / resting), no middle-finger pose; "
+    "legs clearly SEPARATE and correctly jointed at hips/knees/ankles — never fused, melted, shared, "
+    "or branching into a third leg; feet point naturally, not mirrored wrong; "
+    "no missing torso, no floating limbs, no extra limbs, no broken joints, no warped waist; "
+    "body must look like a real continuous person, not a collage."
+)
+
+# Prefer poses that image models render reliably (complex crossed-leg angles often break).
+SAFE_POSE_BLOCK = (
+    "Preferred composition (REQUIRED for stability): single subject only; "
+    "simple clear pose — standing three-quarter view OR seated upright with legs side-by-side "
+    "or lightly crossed at ankles only; camera at normal eye level; "
+    "show continuous torso from shoulders through hips; full or upper-to-mid body; "
+    "AVOID extreme contortions, twisted multi-angle bodies, upside-down poses, "
+    "heavy overlapping legs that hide joint structure, multi-person composites, "
+    "cut-off mid-limb crops that invent extra legs."
 )
 
 
@@ -60,7 +71,13 @@ def build_scene_image_prompt(
     parts = [base]
     if include_middle_finger:
         parts.append(MIDDLE_FINGER_GESTURE)
+    parts.append(SAFE_POSE_BLOCK)
     parts.append(ANATOMY_QUALITY_BLOCK)
+    parts.append(
+        "Negative (must avoid): deformed anatomy, fused legs, extra legs, missing body parts, "
+        "bad hands, bad feet, mutated limbs, disembodied limbs, mannequin joints, "
+        "blurry face, low quality, text, watermark."
+    )
 
     if no_text:
         parts.append(
