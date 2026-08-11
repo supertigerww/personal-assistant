@@ -111,7 +111,7 @@ def expected_scene_prompt(
         scene_prompt=rewritten,
         visual_anchor=load_visual_anchor(settings),
         no_text=True,
-        include_middle_finger=not is_queen_visual,
+        include_middle_finger=False,
     )
 
 

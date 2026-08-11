@@ -265,8 +265,8 @@ SOFT_OVERLAY_BANLIST: frozenset[str] = frozenset(
     }
 )
 
-# Hard cap for on-image glyphs (longer than ~18 often garbles in image models).
-OVERLAY_MAX_CHARS = 18
+# Local Pillow compose can handle longer lines than image-model painted text.
+OVERLAY_MAX_CHARS = 22
 OVERLAY_MIN_CHARS = 2
 
 # Phrases that look like the user is asking to put specific text on the image.
@@ -352,15 +352,15 @@ def _context_relevance_score(phrase: str, context: str, themes: list[str]) -> in
 def select_humiliation_overlays(
     context: str,
     *,
-    count: int = 2,
+    count: int = 4,
     rng: random.Random | None = None,
 ) -> list[str]:
-    """Pick short humiliating Chinese slogans for on-image text.
+    """Pick humiliating Chinese slogans for on-image text.
 
     Prefers theme/context-matched harsh lines. Soft coaching slogans are banned.
-    Stable-ish per context so the same user line does not reshuffle every retry.
+    Uses fresh randomness each call so the same chat does not always stamp identical captions.
     """
-    safe_count = max(1, min(int(count), 3))
+    safe_count = max(2, min(int(count), 5))
     user_phrases = extract_user_requested_phrases(context)
     themes = detect_themes(context)
 
@@ -370,9 +370,8 @@ def select_humiliation_overlays(
     # Only add general after themes so relevance ranking can prefer themed lines
     pool.extend(GENERAL_OVERLAYS)
 
-    seed_source = (context or "default").strip().casefold()
-    seed = int(hashlib.sha1(seed_source.encode("utf-8")).hexdigest()[:8], 16)
-    picker = rng or random.Random(seed)
+    # Fresh entropy every call (avoid same two slogans every image).
+    picker = rng or random.Random()
 
     unique_pool = [
         p.strip()
@@ -511,10 +510,10 @@ def rewrite_scene_without_chat_echo(scene_prompt: str) -> str:
 def normalize_overlay_phrases(
     raw_phrases: Iterable[str],
     *,
-    count: int = 2,
+    count: int = 4,
 ) -> list[str]:
-    """Clamp overlay phrases to short, image-model-friendly Chinese slogans."""
-    safe_count = max(1, min(int(count), 3))
+    """Clamp overlay phrases to Chinese slogans suitable for local Pillow stamp."""
+    safe_count = max(2, min(int(count), 5))
     selected: list[str] = []
     seen: set[str] = set()
     for raw in raw_phrases:
@@ -541,7 +540,7 @@ def normalize_overlay_phrases(
     return selected
 
 
-def parse_llm_overlay_phrases(text: str, *, count: int = 2) -> list[str]:
+def parse_llm_overlay_phrases(text: str, *, count: int = 4) -> list[str]:
     """Parse LLM output into short on-image slogans.
 
     Accepts JSON arrays, one-phrase-per-line, or comma-separated phrases.
@@ -578,7 +577,7 @@ def parse_llm_overlay_phrases(text: str, *, count: int = 2) -> list[str]:
 
 
 def build_overlay_instruction_block(overlays: Iterable[str]) -> str:
-    phrases = [p.strip() for p in overlays if p and p.strip()][:3]
+    phrases = [p.strip() for p in overlays if p and p.strip()][:5]
     if not phrases:
         return ""
     listed = "\n".join(f'- "{phrase}"' for phrase in phrases)

@@ -376,8 +376,8 @@ class MediaService:
             recent_paths = await self._recent_paths_for_user(user_id)
             outcome = await self._search_assets(media_context, user_id=user_id)
 
-            # Add keyword scanning for local X assets (from DB)
-            keywords = self._extract_keywords(media_context)
+            # Local X assets: only short curated fetish keywords (not full chat crumbs)
+            keywords = self._extract_x_search_keywords(media_context)
             x_payload = await self._get_x_assets_by_keywords(keywords)
 
             should_attach_video = resolve_video_attachment(
@@ -584,29 +584,36 @@ class MediaService:
             logger.exception("Failed to load random assets: %s", exc)
             return {"images": [], "videos": []}
 
+    def _extract_x_search_keywords(self, context: str) -> list[str]:
+        """Build a small X-library keyword list from context (not chat n-gram spam)."""
+        from services.x_assets_service import XAssetsService
+
+        raw = self._extract_keywords(context or "")
+        # Keep full-token hits that look like fetish terms; drop long crumbs.
+        candidates = [t for t in raw if 2 <= len(t) <= 8]
+        return XAssetsService.sanitize_search_keywords(candidates)
+
     async def _get_x_assets_by_keywords(self, keywords: list[str]) -> dict[str, list[str]]:
         """Keyword scan for local X assets from DB. Returns dict with 'images' and 'videos' lists of full paths."""
-        if not self.x_assets_service or not keywords:
+        if not self.x_assets_service:
             return {"images": [], "videos": []}
         try:
             posts = await self.x_assets_service.search_humiliation_posts(
-                keywords=keywords, limit=1
+                keywords=keywords or [],
+                limit=1,
             )
-            images = []
-            videos = []
+            images: list[str] = []
+            videos: list[str] = []
             for post in posts:
                 for mpath in post.get("media_paths", [])[:1]:
                     try:
                         p = Path(mpath)
-                        if p.exists() and p.suffix.lower() in self.IMAGE_SUFFIXES:
+                        if not p.exists():
+                            continue
+                        if p.suffix.lower() in self.IMAGE_SUFFIXES:
                             images.append(mpath)
-                        elif p.exists():
-                            videos.append(mpath)
                         else:
-                            # Immediately cleanup the deleted folder from DB
-                            folder = p.parts[0] if p.parts else ""
-                            if folder:
-                                await self.cleanup_x_folder(folder)
+                            videos.append(mpath)
                     except Exception:
                         continue
                     break
@@ -963,7 +970,7 @@ class MediaService:
         overlays: list[str] = []
         scene_for_model = rewrite_scene_without_chat_echo(safe_prompt) if safe_prompt else safe_prompt
         if want_overlays:
-            overlays = await self._resolve_humiliation_overlays(raw_overlay_context, count=2)
+            overlays = await self._resolve_humiliation_overlays(raw_overlay_context, count=4)
             logger.info(
                 "Image overlays prepared count=%s phrases=%s local_compose=%s context_preview=%s",
                 len(overlays),
@@ -972,18 +979,8 @@ class MediaService:
                 raw_overlay_context[:80],
             )
 
-        # Pose cascade: try middle-finger first, then clean pose if moderated.
+        # Clean pose only — no forced middle finger (often looks broken / moderated).
         attempts: list[tuple[str, str]] = [
-            (
-                "clean_with_gesture",
-                build_scene_image_prompt(
-                    scene_prompt=scene_for_model or safe_prompt,
-                    visual_anchor=self._visual_anchor,
-                    overlay_block="",
-                    no_text=True,
-                    include_middle_finger=True,
-                ),
-            ),
             (
                 "clean_no_gesture",
                 build_scene_image_prompt(
@@ -1049,9 +1046,9 @@ class MediaService:
                 results.append(path)
         return results
 
-    async def _resolve_humiliation_overlays(self, context: str, *, count: int = 2) -> list[str]:
+    async def _resolve_humiliation_overlays(self, context: str, *, count: int = 4) -> list[str]:
         """Prefer LLM scene-specific slogans; top up / fall back with the static pool."""
-        safe_count = max(1, min(int(count), 3))
+        safe_count = max(2, min(int(count), 5))
         pool = select_humiliation_overlays(context, count=safe_count)
         enable_llm = bool(getattr(self.settings, "enable_llm_image_overlays", True))
         if not (enable_llm and hasattr(self.grok_client, "generate_image_overlay_phrases")):
@@ -1274,6 +1271,20 @@ class MediaService:
             logger.debug("Automatic media disabled by state for user_id=%s.", user_id)
             return False
 
+        # Cadence force: every N turns always try to attach library media.
+        if self._force_media_this_turn(profile):
+            logger.info(
+                "Force media attach by turn cadence user_id=%s turn=%s",
+                user_id,
+                getattr(profile, "conversation_count", None),
+            )
+            return True
+
+        # User asking for variety / media-ish cues
+        lowered = (context or "")
+        if any(k in lowered for k in ("换花样", "玩点别的", "发图", "看图", "图片", "视频", "看看")):
+            chance = min(1.0, chance + 0.25)
+
         normalized = context.strip().casefold()
         if self._is_good_match(outcome, context):
             chance = min(1.0, chance + 0.15)
@@ -1282,7 +1293,7 @@ class MediaService:
 
         roll = random.random()
         decision = roll < chance
-        logger.debug(
+        logger.info(
             "Automatic media gate user_id=%s state=%s chance=%.2f roll=%.2f best_score=%s decision=%s",
             user_id,
             getattr(profile, "state", ConversationState.NORMAL),
@@ -1293,6 +1304,15 @@ class MediaService:
         )
         return decision
 
+    def _force_media_this_turn(self, profile: Any | None) -> bool:
+        if profile is None:
+            return False
+        turn = int(getattr(profile, "conversation_count", 0) or 0)
+        every = int(getattr(self.settings, "media_force_every_n_turns", 3) or 0)
+        if every <= 0 or turn <= 0:
+            return False
+        return turn % every == 0
+
     def _should_use_random_fallback(
         self,
         *,
@@ -1301,20 +1321,22 @@ class MediaService:
         context: str,
         outcome: AssetSearchOutcome,
     ) -> bool:
-        if outcome.keywords or self._extract_context_terms(context):
-            logger.debug(
-                "Skipping random fallback for user_id=%s because context was specific but had no strong local match.",
-                user_id,
-            )
-            return False
+        # Always allow random library images when nothing matched — previously this
+        # returned False whenever keywords existed, which starved local media.
+        if self._force_media_this_turn(profile):
+            return True
 
-        chance = self._clamp_probability(getattr(self.settings, "media_random_fallback_probability", 0.25))
+        chance = self._clamp_probability(getattr(self.settings, "media_random_fallback_probability", 0.55))
         if chance <= 0:
             return False
 
+        # Slightly lower chance if context was very specific but still allow fallback.
+        if outcome.keywords or self._extract_context_terms(context):
+            chance = min(1.0, chance * 0.85)
+
         roll = random.random()
         decision = roll < chance
-        logger.debug(
+        logger.info(
             "Random fallback media gate user_id=%s state=%s chance=%.2f roll=%.2f decision=%s",
             user_id,
             getattr(profile, "state", ConversationState.NORMAL),

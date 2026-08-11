@@ -25,7 +25,7 @@ def test_compose_writes_new_file_with_phrases(tmp_path):
     Image.new("RGB", (400, 600), color=(40, 20, 20)).save(img)
     out = compose_humiliation_overlays(
         img,
-        ["无脑狗只准看鞋尖！", "只许漏不准射！"],
+        ["无脑狗只准看鞋尖！", "只许漏不准射！", "寸止！", "绿奴跪着看！"],
         output_dir=tmp_path,
     )
     assert Path(out).exists()

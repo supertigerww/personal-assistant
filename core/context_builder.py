@@ -58,6 +58,24 @@ class ContextBuilder:
         "手先停",
         "停手",
         "慢下来",
+        # Sticky shoe-lick + tip-stroke formula (screenshot loop)
+        "鞋底",
+        "舔干净",
+        "继续舔",
+        "刮龟头",
+        "龟头",
+        "立停",
+        "立刻停",
+        "立刻停手",
+        "撸三下",
+        "撸五下",
+        "两下就停",
+        "三下",
+        "五下",
+        "舌头抵在",
+        "把脸贴着",
+        "只许用指头",
+        "用指头慢",
     )
 
     # Rotating play axes — prefer COMMANDS / teasing over "make user write essays".
@@ -314,6 +332,7 @@ class ContextBuilder:
         joi_loop = ContextBuilder._detect_joi_loop(recent_assistant)
         confession_loop = ContextBuilder._detect_confession_loop(recent_assistant)
         denial_loop = ContextBuilder._detect_denial_only_loop(recent_assistant)
+        shoe_stroke_loop = ContextBuilder._detect_shoe_stroke_loop(recent_assistant)
         loop_lines = ""
         if joi_loop:
             loop_lines += (
@@ -329,6 +348,12 @@ class ContextBuilder:
                 "- Denial-only loop detected（停手/不准碰连续出现）。"
                 "本轮必须允许碰/慢撸/按节奏至少一种，用戏弄而不是纯禁止。\n"
             )
+        if shoe_stroke_loop:
+            loop_lines += (
+                "- Shoe+tip-stroke loop detected（鞋底舔 + 刮龟头 N 下立刻停）。"
+                "本轮禁止再写这套公式。必须换命令结构（姿势/锁精判决/绿帽旁观叙述/强制称呼/踩踏幻想/完全不同的手部规则）。"
+                "本轮应调用 roll_random_twist 或 search_sm_play_ideas 或 search_x_humiliation 之一。\n"
+            )
 
         return (
             "Anti-template (MUST obey this turn):\n"
@@ -342,6 +367,7 @@ class ContextBuilder:
             "- If the user asked for feet/service/oral fantasy/nipples/etc., follow THAT beat; do not yank them back to screen-staring JOI.\n"
             "- Prefer imperative commands over questions. At most one question this turn; zero is better. End on an order or insult, not an interview.\n"
             "- 本轮结尾优先：直接命令/任务/羞辱判决。禁止连续用「讲清楚？」「是什么姿势？」收尾。\n"
+            "- 禁止固定套路：「跪好+舔鞋底+刮龟头N下立刻停」连续复读。即使还在足控/寸止，也要换句式与动作细节。\n"
             f"- Style hint for this turn: {style_hint}\n"
             "- If recent assistant replies felt copy-pasted, call roll_random_twist once, then write a fresh angle.\n"
             "- 禁止固定首尾：不要「跪好，废物贱狗…」开头；不要「——继续，别停」或审讯式提问收尾。\n"
@@ -416,6 +442,24 @@ class ContextBuilder:
         return hits >= 2
 
     @staticmethod
+    def _detect_shoe_stroke_loop(recent_assistant: list[str]) -> bool:
+        """Detect the sticky formula: lick sole + N tip strokes then stop."""
+        if len(recent_assistant) < 2:
+            return False
+        shoe_markers = ("鞋底", "舔鞋", "鞋尖", "舌头抵", "脸贴着鞋", "继续舔")
+        stroke_markers = ("刮龟头", "龟头", "指头慢", "撸三", "撸五", "两下", "立刻停", "立停", "撸完立刻")
+        combo_hits = 0
+        partial_hits = 0
+        for reply in recent_assistant[-3:]:
+            has_shoe = any(m in reply for m in shoe_markers)
+            has_stroke = any(m in reply for m in stroke_markers)
+            if has_shoe and has_stroke:
+                combo_hits += 1
+            elif has_shoe or has_stroke:
+                partial_hits += 1
+        return combo_hits >= 2 or (combo_hits >= 1 and partial_hits >= 1)
+
+    @staticmethod
     def _play_axis_guidance(
         *,
         profile: UserProfile,
@@ -431,16 +475,32 @@ class ContextBuilder:
         confession_loop = ContextBuilder._detect_confession_loop(assistant_replies)
         denial_loop = ContextBuilder._detect_denial_only_loop(assistant_replies)
         joi_loop = ContextBuilder._detect_joi_loop(assistant_replies)
+        shoe_stroke_loop = ContextBuilder._detect_shoe_stroke_loop(assistant_replies)
+        user_wants_variety = any(
+            k in text
+            for k in ("换花样", "别的玩法", "新玩法", "玩点别的", "换一个", "无聊", "重复", "没意思")
+        )
 
         # User-steered axes take priority so the model does not ignore pivots.
-        if any(k in text for k in ("脚", "脚底", "脚趾", "鞋", "丝足", "美腿")):
-            forced = "foot_command: 用户提脚——足控命令+你方羞辱叙述，禁止拧回审讯作文"
+        if user_wants_variety or shoe_stroke_loop:
+            forced = (
+                "hard_switch: 用户要换花样或检测到鞋底+刮龟头复读——"
+                "禁止再舔鞋底+N下龟头立刻停。"
+                "改用：绿帽旁观口述 / 锁精判决 / 强制自称 / 踩踏幻想 / 姿势惩罚 / 对比羞辱 之一，句式全新"
+            )
+        elif any(k in text for k in ("圣水", "尿", "喝")):
+            forced = "service_tease: 用户提圣水——用你方叙述推进，换命令结构，禁止回退到刮龟头公式"
+        elif any(k in text for k in ("脚", "脚底", "脚趾", "鞋", "丝足", "美腿")):
+            forced = (
+                "foot_command: 用户提脚——足控可以继续，但禁止「舔鞋底+刮龟头N下停」公式；"
+                "换：闻/踩/夹脸/只准看不准舔/锁精盯脚等"
+            )
         elif any(k in text for k in ("口交", "舔", "侍奉", "舌头", "含", "交合")):
             forced = "service_tease: 用户提侍奉/交合——你口述画面并下令，允许或边缘撸，少提问"
         elif any(k in text for k in ("乳", "奶", "乳头")):
             forced = "nipple_order: 用户提乳头——直接玩弄指令+羞辱"
-        elif any(k in text for k in ("绿帽", "别人", "旁观", "女奴", "cuck", "NTR", "ntr")):
-            forced = "cuck_scene_push: 用户提绿帽/女奴——你推进旁观画面+命令，不要让他填空"
+        elif any(k in text for k in ("绿帽", "别人", "旁观", "女奴", "cuck", "NTR", "ntr", "和别人")):
+            forced = "cuck_scene_push: 用户提绿帽/女奴——你推进旁观画面+命令，不要让他填空，禁止立刻拧回刮龟头"
         elif any(k in text for k in ("女装", "伪娘", "裙子", "丝袜装")):
             forced = "outfit_tease: 用户提女装——穿戴戏弄+命令"
         elif any(k in text for k in ("太舒服", "不想停", "硬到", "想射", "继续撸", "想碰")):
@@ -450,19 +510,25 @@ class ContextBuilder:
         elif denial_loop:
             forced = "allow_stroke_edge: 刚连续停手——本轮必须给撸/节奏命令"
         elif joi_loop:
-            forced = "cuck_scene_push: JOI 复读——切换绿帽/旁观画面命令或足控"
+            forced = "cuck_scene_push: JOI 复读——切换绿帽/旁观画面命令或足控变奏"
         else:
             idx = int(getattr(profile, "conversation_count", 0) or 0) % len(ContextBuilder.PLAY_AXIS_HINTS)
             forced = ContextBuilder.PLAY_AXIS_HINTS[idx]
 
-        must_rotate = confession_loop or denial_loop or joi_loop or (
-            int(getattr(profile, "conversation_count", 0) or 0) % 3 == 0
+        must_rotate = (
+            confession_loop
+            or denial_loop
+            or joi_loop
+            or shoe_stroke_loop
+            or user_wants_variety
+            or (int(getattr(profile, "conversation_count", 0) or 0) % 3 == 0)
         )
         if must_rotate:
             rotate_line = (
                 "- MUST proactively switch/advance play this turn (user should not need to ask for 换花样). "
-                "Use recommended_play_axis or roll_random_twist / search_sm_play_ideas.\n"
-                "- 本轮必须主动换打法或加码，不要等用户提醒。\n"
+                "Use recommended_play_axis; call roll_random_twist and/or search_sm_play_ideas "
+                "and/or search_x_humiliation when recommended.\n"
+                "- 本轮必须主动换打法或加码，不要等用户提醒；禁止鞋底+刮龟头公式复读。\n"
             )
         else:
             rotate_line = (
@@ -476,6 +542,7 @@ class ContextBuilder:
             "- Keep 1 main axis. Spoken Chinese. Prefer teasing insults + direct orders over questionnaires.\n"
             "- 本轮：直接给指示/即时任务；你自己把羞辱画面讲出来；少逼用户描述。\n"
             "- Allow stroking/edging on some turns — denial is a tool, not the only mode.\n"
+            "- Never repeat the exact structure 跪好→舔鞋底→刮龟头N下立刻停 across consecutive turns.\n"
         )
 
     @staticmethod
@@ -536,6 +603,9 @@ class ContextBuilder:
             "换一个",
             "新玩法",
             "别的玩法",
+            "玩点别的",
+            "别的花样",
+            "新花样",
             "无聊",
             "重复",
             "没意思",
@@ -558,6 +628,8 @@ class ContextBuilder:
         ][-3:]
         if ContextBuilder._detect_joi_loop(assistant):
             return True
+        if ContextBuilder._detect_shoe_stroke_loop(assistant):
+            return True
 
         if turn > 0 and turn % interval == 0:
             return True
@@ -572,11 +644,11 @@ class ContextBuilder:
             )
         if recommended:
             return (
-                "- sm_play_search_recommended is true. You MAY call search_sm_play_ideas ONCE "
+                "- sm_play_search_recommended is true. You SHOULD call search_sm_play_ideas ONCE "
                 "(topic aligned with recommended_play_axis or the user's pivot). "
                 "Pick ONE idea from the digest and rewrite as natural spoken orders. "
                 "Never mention research/web/X/links/authors.\n"
-                "- 本轮可以联网搜一次调教玩法：只取 1 个点子，用你自己的口吻下令，禁止贴检索原文。\n"
+                "- 本轮应当联网搜一次调教玩法：只取 1 个点子，用你自己的口吻下令，禁止贴检索原文。\n"
             )
         return (
             "- sm_play_search_recommended is false. Do NOT call search_sm_play_ideas this turn "
@@ -614,6 +686,16 @@ class ContextBuilder:
         )
         if any(keyword in text for keyword in trigger_keywords):
             return True
+        if any(k in text for k in ("玩点别的", "别的花样", "新花样", "换玩法")):
+            return True
+
+        assistant = [
+            str(item.get("content") or "")
+            for item in recent_messages
+            if item.get("role") == "assistant"
+        ][-3:]
+        if ContextBuilder._detect_shoe_stroke_loop(assistant) or ContextBuilder._detect_joi_loop(assistant):
+            return True
 
         # Short reactive turns almost never need external dump
         if ContextBuilder._length_mode_for_user_text(text) == "short":
@@ -625,12 +707,7 @@ class ContextBuilder:
             return True
 
         # If last two assistant replies are both very long, prefer twist over more X
-        assistant = [
-            str(item.get("content") or "")
-            for item in recent_messages
-            if item.get("role") == "assistant"
-        ][-2:]
-        if len(assistant) == 2 and all(len(item) > 180 for item in assistant):
+        if len(assistant) >= 2 and all(len(item) > 180 for item in assistant[-2:]):
             return False
 
         # Mild extra chance mid-interval for longer user messages
@@ -645,10 +722,10 @@ class ContextBuilder:
     def _x_humiliation_search_guidance(*, recommended: bool) -> str:
         if recommended:
             return (
-                "- x_humiliation_search_recommended is true. You MAY call search_x_humiliation ONCE for a single fresh image/action. "
-                "Prefer online; fall back to fetch_local_x_humiliation only if online is empty. "
+                "- x_humiliation_search_recommended is true. You SHOULD call search_x_humiliation ONCE "
+                "(or fetch_local_x_humiliation if online empty) for a single fresh image/action. "
                 "Digest into ONE concrete detail in your own words — no hashtags, no keyword dump, never mention sources/X/authors.\n"
-                "- 本轮可以拉一次 X 素材：只提炼一个画面/动作，用口语写进羞辱，不要标签堆叠。\n"
+                "- 本轮应当拉一次 X 素材（在线优先，空则本地）：只提炼一个画面/动作，用口语写进羞辱，推动换花样。\n"
             )
         return (
             "- x_humiliation_search_recommended is false. Do NOT call search_x_humiliation or fetch_local_x_humiliation this turn. "

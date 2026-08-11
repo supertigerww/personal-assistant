@@ -73,16 +73,17 @@ class Settings(BaseSettings):
     generated_images_path: str = "data/generated_images"
     max_local_video_size_mb: int = 45
     # Probability of attaching *local/X library* media on a soft match turn.
-    media_send_probability_normal: float = 0.40
-    media_send_probability_intense: float = 0.55
+    media_send_probability_normal: float = 0.62
+    media_send_probability_intense: float = 0.78
     media_send_probability_aftercare: float = 0.0
     media_send_probability_paused: float = 0.0
-    media_random_fallback_probability: float = 0.25
+    media_random_fallback_probability: float = 0.55
     media_max_items_per_message: int = 1
+    # Force a library image/video attempt every N user turns even without strong match.
+    media_force_every_n_turns: int = 3
     # Soft auto *AI scene generation* only after local/X did not attach.
-    # Aligned with media_send so gen and library feel similarly frequent when both can fire.
-    scene_image_auto_probability_normal: float = 0.40
-    scene_image_auto_probability_intense: float = 0.55
+    scene_image_auto_probability_normal: float = 0.45
+    scene_image_auto_probability_intense: float = 0.60
     luna_visual_prompt_path: str = "prompts/luna_visual.txt"
     media_repeat_cooldown_hours: int = 48
     media_repeat_penalty_score: int = 24
@@ -112,12 +113,12 @@ class Settings(BaseSettings):
     )
     x_assets_db_path: str = "/app/assets/x_data/x_assets.db"
     x_assets_root: str = "/app/assets/x_assets"
-    # How often runtime recommends search_x_humiliation (every N user turns). Default 4 = low-frequency seasoning.
-    x_humiliation_search_interval_turns: int = 4
+    # How often runtime recommends search_x_humiliation (every N user turns).
+    x_humiliation_search_interval_turns: int = 3
     # Online SM play-idea research (xAI web_search + x_search). Off if API rejects tools.
     enable_sm_play_web_search: bool = True
     # Recommend search_sm_play_ideas about every N turns (independent of X image posts).
-    sm_play_search_interval_turns: int = 5
+    sm_play_search_interval_turns: int = 3
     # Slightly higher default creativity for dialogue; override via env if needed.
     xai_temperature: float = 0.95
 

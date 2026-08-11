@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-# Always-on pose + anatomy quality for every generated still.
+# Optional only — default off (finger gestures often render poorly / moderated).
 MIDDLE_FINGER_GESTURE = (
-    "Pose gesture (REQUIRED): she clearly raises one hand toward the camera/viewer "
+    "Pose gesture (optional): she raises one hand toward the camera/viewer "
     "and flips the middle finger (obscene insult gesture), dominant mocking expression, "
     "middle finger fully extended and easy to see; the other hand may rest on hip, thigh, or leg."
 )
@@ -14,6 +14,7 @@ ANATOMY_QUALITY_BLOCK = (
     "Anatomy quality (REQUIRED, strict): photorealistic correct human anatomy; "
     "exactly ONE head, TWO arms, TWO hands, TWO legs, TWO feet; "
     "each hand has exactly five fingers, no extra fingers, no missing fingers, no fused fingers; "
+    "natural relaxed hands (e.g. one hand on hip, other arm relaxed) — do NOT force middle-finger or odd finger poses; "
     "no extra limbs, no third leg, no duplicated legs, no merged legs, no broken joints; "
     "natural limb placement, coherent seated or standing pose, no warped torso; "
     "clean silhouette, high detail, sharp focus."
@@ -39,7 +40,7 @@ def build_scene_image_prompt(
     visual_anchor: str,
     overlay_block: str = "",
     no_text: bool = False,
-    include_middle_finger: bool = True,
+    include_middle_finger: bool = False,
 ) -> str:
     cleaned_scene = scene_prompt.strip()
     cleaned_anchor = visual_anchor.strip()

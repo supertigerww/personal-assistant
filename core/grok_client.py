@@ -388,36 +388,37 @@ class GrokClient:
         self,
         *,
         scene_context: str,
-        count: int = 2,
+        count: int = 4,
         themes: list[str] | None = None,
     ) -> list[str]:
-        """Ask the chat model for short, scene-specific on-image Chinese slogans."""
-        safe_count = max(1, min(int(count), 3))
-        trimmed = self._normalize_text(scene_context)[:320]
+        """Ask the chat model for scene-specific on-image Chinese slogans."""
+        safe_count = max(2, min(int(count), 5))
+        trimmed = self._normalize_text(scene_context)[:400]
         theme_label = "、".join(themes) if themes else "（从上下文自判）"
         system = (
-            "你是 Luna，残忍下流的 SM 女王。为场景图写画在图上的中文羞辱标语。\n"
-            "口吻必须像：贱狗/死贱狗/无脑狗/恋足死狗/锁精狗/奴下奴/绿奴/女装狗，"
-            "命令像：漏精、寸止、盯脚、踩烂、只许漏不准射。\n"
+            "你是 Luna，残忍下流的 SM 女王。为场景图写画在图上的中文羞辱 meme 字幕。\n"
+            "口吻：贱狗/死贱狗/无脑狗/恋足狗/锁精狗/奴下奴/绿奴/女装狗；命令要脏要具体。\n"
             "硬性要求：\n"
-            f"- 正好 {safe_count} 条；图要留白，禁止多写\n"
-            f"- 每条 {2}～{16} 个汉字（可带！），可以超过十字，但不要写成聊天长句\n"
-            "- **必须紧扣当前对话上下文**："
-            "聊脚/鞋→盯脚强制或恋足羞辱；聊锁精→锁奴漏精；聊绿帽→绿奴；"
-            "聊女装→女装狗；聊寸止/漏→只许漏不准射/寸止/流精\n"
-            "- 禁止温柔教练句：禁止「慢点撸」「手别停」「按我节奏」「好好学着」\n"
-            "- 禁止复述用户整段聊天；禁止英文、markdown、编号解释\n"
+            f"- 正好 {safe_count} 条，条条意思不同，禁止同义反复\n"
+            "- 每条 4～20 个汉字（可带！）；可以较长，但不要写成聊天整段\n"
+            "- **必须紧扣当前对话上下文**的具体玩法/对象/动作（绿帽/脚/锁/寸止/女装等）\n"
+            "- 结构尽量混搭，不要每条都「死X狗…漏精」或「只准看…」同一句式：\n"
+            "  · 1 条称呼/身份标签\n"
+            "  · 1～2 条场景命令（盯/舔/跪/锁/漏）\n"
+            "  · 1 条判决或羞辱结果\n"
+            "  · 可加 1 条短狠词（寸止！/漏精！/再敢射满就踩烂！）\n"
+            "- 禁止万能模板复读：禁止总写「死X狗盯Y漏精」「X狗只准看Z」两行交差\n"
+            "- 禁止温柔句：慢点撸/手别停/按我节奏/好好学着\n"
+            "- 禁止英文、markdown、解释\n"
             "- 只输出 JSON 字符串数组\n"
-            "好例子："
-            "[\"无脑狗只准看鞋尖！\",\"看着鞋底漏精！\"] 或 "
-            "[\"锁精贱狗盯着脚寸止！\",\"只许漏不准射！\"] 或 "
-            "[\"绿奴恋足废物自己漏！\",\"贱狗！无脑！\"]\n"
-            "坏例子：慢点撸、手别停、好好看着"
+            "好例子（绿帽+恋足）："
+            "[\"绿奴\",\"鞋底才是你的天！\",\"看着女奴被操自己漏！\",\"无脑狗给我舔鞋！\",\"寸止！\"]\n"
+            "坏例子：两条句式几乎一样、或慢点撸"
         )
         user = (
-            f"当前对话上下文（标语必须与此相关）:\n{trimmed or '（无）'}\n"
+            f"当前对话上下文（标语必须与此相关，且每条换说法）:\n{trimmed or '（无）'}\n"
             f"检测到的主题: {theme_label}\n"
-            f"输出 {safe_count} 条贴合上下文的狠脏标语 JSON:"
+            f"输出 {safe_count} 条互不重复的狠脏标语 JSON:"
         )
 
         for attempt in range(1, self._max_retries + 2):

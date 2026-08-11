@@ -35,6 +35,16 @@ _FONT_CANDIDATES: tuple[str, ...] = (
 )
 
 
+# Fill colors cycle so multi-line captions don't look identical.
+_FILL_CYCLE: tuple[tuple[int, int, int, int], ...] = (
+    (255, 245, 200, 255),  # pale gold
+    (255, 90, 90, 255),  # red
+    (255, 255, 255, 255),  # white
+    (255, 180, 220, 255),  # pink
+    (255, 220, 100, 255),  # yellow
+)
+
+
 def compose_humiliation_overlays(
     image_path: str | Path,
     phrases: Sequence[str],
@@ -42,12 +52,12 @@ def compose_humiliation_overlays(
     output_dir: str | Path | None = None,
     font_path: str | None = None,
 ) -> str:
-    """Draw sparse crude Chinese slogans onto a local image; return output path.
+    """Draw multiple crude Chinese slogans onto a local image; return output path.
 
     On any failure, returns the original path unchanged.
     """
     source = Path(image_path)
-    cleaned = [p.strip() for p in phrases if p and str(p).strip()][:3]
+    cleaned = [p.strip() for p in phrases if p and str(p).strip()][:5]
     if not cleaned:
         return str(source)
     if not source.exists():
@@ -55,7 +65,7 @@ def compose_humiliation_overlays(
         return str(source)
 
     try:
-        from PIL import Image, ImageDraw, ImageFont
+        from PIL import Image, ImageDraw
     except ImportError:
         logger.warning("Pillow not installed; skipping local text compose.")
         return str(source)
@@ -66,20 +76,20 @@ def compose_humiliation_overlays(
             width, height = image.size
             draw = ImageDraw.Draw(image)
 
-            font = _load_font(font_path, image_height=height)
-            # Layout: top-right + bottom bar (or single bottom if one phrase)
-            positions = _layout_slots(len(cleaned), width, height)
-            for phrase, (anchor, xy) in zip(cleaned, positions):
+            slots = _layout_slots(len(cleaned), width, height)
+            for index, (phrase, (anchor, xy, size_scale)) in enumerate(zip(cleaned, slots)):
+                font = _load_font(font_path, image_height=height, size_scale=size_scale)
+                fill = _FILL_CYCLE[index % len(_FILL_CYCLE)]
                 _draw_outlined_text(
                     draw,
                     text=phrase,
                     xy=xy,
                     font=font,
-                    fill=(255, 245, 200, 255),
+                    fill=fill,
                     outline=(0, 0, 0, 255),
-                    outline_width=max(2, height // 280),
+                    outline_width=max(2, height // 260),
                     anchor=anchor,
-                    max_width=int(width * 0.88),
+                    max_width=int(width * 0.90),
                 )
 
             out_dir = Path(output_dir) if output_dir else source.parent
@@ -114,10 +124,11 @@ def resolve_cjk_font_path(preferred: str | None = None) -> Path | None:
     return None
 
 
-def _load_font(preferred: str | None, *, image_height: int):
+def _load_font(preferred: str | None, *, image_height: int, size_scale: float = 1.0):
     from PIL import ImageFont
 
-    size = max(28, min(72, image_height // 16))
+    base = max(26, min(64, image_height // 18))
+    size = max(22, int(base * size_scale))
     font_path = resolve_cjk_font_path(preferred)
     if font_path is not None:
         try:
@@ -128,22 +139,33 @@ def _load_font(preferred: str | None, *, image_height: int):
     return ImageFont.load_default()
 
 
-def _layout_slots(count: int, width: int, height: int) -> list[tuple[str, tuple[int, int]]]:
-    """Return (anchor, xy) pairs for 1–3 slogans."""
-    margin_x = int(width * 0.06)
-    margin_y = int(height * 0.06)
-    if count <= 1:
-        return [("ms", (width // 2, height - margin_y - int(height * 0.04)))]
-    if count == 2:
-        return [
-            ("ra", (width - margin_x, margin_y + int(height * 0.02))),
-            ("ms", (width // 2, height - margin_y - int(height * 0.04))),
-        ]
-    return [
-        ("ra", (width - margin_x, margin_y + int(height * 0.02))),
-        ("la", (margin_x, int(height * 0.42))),
-        ("ms", (width // 2, height - margin_y - int(height * 0.04))),
+def _layout_slots(
+    count: int,
+    width: int,
+    height: int,
+) -> list[tuple[str, tuple[int, int], float]]:
+    """Return (anchor, xy, size_scale) for up to 5 slogans — meme-style coverage."""
+    mx = int(width * 0.05)
+    my = int(height * 0.04)
+    # (anchor, x, y, size_scale)
+    catalog = [
+        ("mt", width // 2, my + int(height * 0.03), 1.15),  # top center big
+        ("mt", width // 2, my + int(height * 0.12), 0.95),  # top second line
+        ("la", mx, int(height * 0.38), 0.85),  # mid left
+        ("ra", width - mx, int(height * 0.52), 0.85),  # mid right
+        ("ms", width // 2, height - my - int(height * 0.08), 1.10),  # bottom
     ]
+    if count <= 1:
+        picks = [catalog[4]]
+    elif count == 2:
+        picks = [catalog[0], catalog[4]]
+    elif count == 3:
+        picks = [catalog[0], catalog[2], catalog[4]]
+    elif count == 4:
+        picks = [catalog[0], catalog[1], catalog[2], catalog[4]]
+    else:
+        picks = catalog[:5]
+    return [(a, (x, y), s) for a, x, y, s in picks]
 
 
 def _draw_outlined_text(
@@ -158,14 +180,30 @@ def _draw_outlined_text(
     anchor: str,
     max_width: int,
 ) -> None:
-    # Soft wrap very long lines for the image model-friendly slogans up to ~18 chars.
+    # Soft wrap longer slogans for readability.
     wrapped = text
-    if len(text) > 12:
-        # Prefer wrap at punctuation
-        wrapped = "\n".join(textwrap.wrap(text, width=10) or [text])
+    if len(text) > 11:
+        wrapped = "\n".join(textwrap.wrap(text, width=11) or [text])
 
-    x, y = xy
-    # Manual outline for broad Pillow compatibility
+    # Pillow multiline_text does not support anchor — compute top-left ourselves.
+    spacing = 4
+    bbox = draw.multiline_textbbox((0, 0), wrapped, font=font, spacing=spacing, align="center")
+    tw = bbox[2] - bbox[0]
+    th = bbox[3] - bbox[1]
+    ax, ay = xy
+    if anchor in {"mt", "ms", "mb"}:
+        left = ax - tw // 2
+    elif anchor in {"rt", "ra", "rb", "rm"}:
+        left = ax - tw
+    else:
+        left = ax
+    if anchor in {"mt", "lt", "rt"}:
+        top = ay
+    elif anchor in {"ms", "la", "ra", "mm"}:
+        top = ay - th // 2
+    else:
+        top = ay - th
+
     for dx in range(-outline_width, outline_width + 1):
         for dy in range(-outline_width, outline_width + 1):
             if dx == 0 and dy == 0:
@@ -173,20 +211,18 @@ def _draw_outlined_text(
             if dx * dx + dy * dy > outline_width * outline_width:
                 continue
             draw.multiline_text(
-                (x + dx, y + dy),
+                (left + dx, top + dy),
                 wrapped,
                 font=font,
                 fill=outline,
-                anchor=anchor,
                 align="center",
-                spacing=6,
+                spacing=spacing,
             )
     draw.multiline_text(
-        (x, y),
+        (left, top),
         wrapped,
         font=font,
         fill=fill,
-        anchor=anchor,
         align="center",
-        spacing=6,
+        spacing=spacing,
     )
